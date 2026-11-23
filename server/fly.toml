@@ -1,0 +1,20 @@
+# fly launch --no-deploy --copy-config ; fly volumes create teleglance_data --size 1 ; fly secrets set ... ; fly deploy
+app = "teleglance"
+primary_region = "fra"
+
+[build]
+
+[env]
+  PORT = "8787"
+  DATA_DIR = "/data"
+
+[mounts]
+  source = "teleglance_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # Keep one machine running so the Telegram connection stays up.
+  auto_stop_machines = "off"
+  min_machines_running = 1
