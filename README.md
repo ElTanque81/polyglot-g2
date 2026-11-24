@@ -1,3 +1,5 @@
+<img src="docs/logo.png" width="96" alt="Polyglot logo">
+
 # Polyglot
 
 **Telegram in every language, at a glance on Even Realities G2.** Read any message in your language, answer in theirs with one tap or one sentence, and never forget what you promised.
