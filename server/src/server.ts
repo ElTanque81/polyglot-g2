@@ -52,6 +52,7 @@ const scripted = (l: Live) => l.provider.name === 'demo' && !aiEnabled()
 app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply: FastifyReply) => {
   const code = err.statusCode ?? 500
   if (code >= 500) app.log.error(err)
+  else if (code !== 401) app.log.warn(`${_req.method} ${_req.url} -> ${code} ${err.message}`)
   reply.code(code).send({ error: code === 401 ? 'UNAUTHORIZED' : err.message })
 })
 

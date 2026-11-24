@@ -53,12 +53,22 @@ setInterval(() => {
   }
 }, 60_000).unref()
 
+const withTimeout = <T>(p: Promise<T>, ms: number, code: string) =>
+  Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(code)), ms))])
+
 export async function startLogin(loginId: string, phone: string) {
   const client = newClient()
-  await client.connect()
-  const { phoneCodeHash, isCodeViaApp } = await client.sendCode(creds(), phone)
-  pending.set(loginId, { client, phone, phoneCodeHash, created: Date.now() })
-  return { viaApp: isCodeViaApp }
+  try {
+    await withTimeout(client.connect(), 20_000, 'TELEGRAM_UNREACHABLE')
+    const { phoneCodeHash, isCodeViaApp } = await withTimeout(client.sendCode(creds(), phone), 20_000, 'TELEGRAM_TIMEOUT')
+    pending.set(loginId, { client, phone, phoneCodeHash, created: Date.now() })
+    return { viaApp: isCodeViaApp }
+  } catch (e) {
+    client.disconnect().catch(() => {})
+    const code = (e as { errorMessage?: string }).errorMessage ?? (e as Error).message ?? String(e)
+    console.error('[auth/start] Telegram said:', code)
+    throw Object.assign(new Error(code), { statusCode: 400 })
+  }
 }
 
 export type VerifyResult = { ok: true; session: string } | { ok: false; needPassword: true } | { ok: false; error: string }
@@ -78,6 +88,7 @@ export async function verifyLogin(loginId: string, code: string, password?: stri
   } catch (e) {
     const msg = (e as { errorMessage?: string }).errorMessage ?? String(e)
     if (msg === 'SESSION_PASSWORD_NEEDED') return { ok: false, needPassword: true }
+    console.error('[auth/verify] Telegram said:', msg)
     return { ok: false, error: msg }
   }
   const session = (p.client.session as StringSession).save()
