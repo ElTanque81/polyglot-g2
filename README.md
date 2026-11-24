@@ -17,9 +17,9 @@ People who live in Telegram: founders, traders, community managers, remote teams
 ## How it works
 
 1. **Focus inbox.** On your phone you pick the chats that matter (for example your work group and family). Only their unread messages reach the glasses, one per screen.
-2. **"Needs you" radar.** Claude flags messages that ask you something, mention you or set a deadline. They come first, with a one-line gist (`AI: Needs the deck before 3pm`).
+2. **"Needs you" radar.** The LLM flags messages that ask you something, mention you or set a deadline. They come first, with a one-line gist (`AI: Needs the deck before 3pm`).
 3. **One-tap replies.** Tap: three reply drafts that fit the chat's tone and language. Swipe to pick, tap to send.
-4. **Voice replies.** Hold the touchpad (or tap "Speak my own reply"), say one sentence, release. Whisper transcribes the G2 microphone audio, Claude cleans it up ("two" → "2", filler words gone), you tap to send.
+4. **Voice replies.** Hold the touchpad (or tap "Speak my own reply"), say one sentence, release. Whisper transcribes the G2 microphone audio, the LLM cleans it up ("two" → "2", filler words gone), you tap to send.
 5. **Undo window.** Every send waits 5 seconds; tap to cancel.
 6. **Auto-translation.** A Spanish message shows up in English, with the original underneath, and the reply goes out in Spanish.
 7. **Channel brief.** From the glasses menu: your crypto/news channels merged into 3 points, with the channels that reported each story.
@@ -52,17 +52,17 @@ Works with the G2 temple touchpads and the R1 ring.
 Even G2 + R1  ──BLE──  TeleGlance app (WebView in the Even Realities app)  ──HTTPS──  TeleGlance server
  display, gestures,     glasses UI + phone settings page                              ├─ Telegram (MTProto, user account, GramJS)
  microphone                                                                            ├─ Whisper (Groq or OpenAI)
-                                                                                       └─ Claude (Anthropic API)
+                                                                                       └─ LLM via Otari gateway (or Claude / OpenAI)
 ```
 
 - **`app/`**: Vite + TypeScript, `@evenrealities/even_hub_sdk` 0.0.16. Declarative screens on the 576 × 288 canvas; text updates in place (`textContainerUpgrade`), full rebuild only when the layout changes. Native list container for reply choices. Contextual menu for global actions. The same page renders the phone-side sign-in and settings (EN/DE).
-- **`server/`**: Fastify + GramJS. The only place that holds API keys. Proper CORS for the WebView. Telegram sessions are encrypted at rest (AES-256-GCM); device tokens are stored only as SHA-256 hashes.
+- **`server/`**: Fastify + GramJS. One LLM layer for Otari (OpenAI-compatible, with region redirect), Claude or OpenAI. The only place that holds API keys. Proper CORS for the WebView. Telegram sessions are encrypted at rest (AES-256-GCM); device tokens are stored only as SHA-256 hashes.
 - **Why a user account, not a bot:** a bot cannot see your private chats. TeleGlance uses Telegram's official client API with its own `api_id`.
 - **Sign-in without Google:** phone number + Telegram code (+ 2FA password) on the phone page.
 
 ### Privacy and safety
 
-- Messages are never stored. The server reads only the chats you picked, keeps them in memory and sends only the message being handled (plus a few lines of context) to Claude.
+- Messages are never stored. The server reads only the chats you picked, keeps them in memory and sends only the message being handled (plus a few lines of context) to the LLM.
 - "Sign out" deletes the encrypted session.
 - No money involved; no keys in the app or the repo.
 
@@ -87,8 +87,8 @@ npm run dev               # http://localhost:8787
 |---|---|
 | `SERVER_SECRET` | storing Telegram sessions (any 32+ random chars) |
 | `TG_API_ID`, `TG_API_HASH` | real Telegram login ([my.telegram.org/apps](https://my.telegram.org/apps)) |
-| `ANTHROPIC_API_KEY` | AI triage, drafts, cleanup, brief, translation |
-| `STT_PROVIDER`, `STT_API_KEY` | voice replies (Groq or OpenAI Whisper) |
+| `AI_PROVIDER` + `OTARI_API_KEY` | AI triage, drafts, cleanup, brief, translation via the [Otari](https://otari.ai) gateway (`anthropic`/`openai` also supported) |
+| `STT_PROVIDER`, `GROQ_API_KEY` | voice replies (Groq Whisper; `openai` also supported) |
 
 Without keys the server still runs: the **demo account** uses fictional chats and scripted AI output, so the whole flow can be tried in the simulator.
 
@@ -112,6 +112,15 @@ npx evenhub qr --url "http://<your-lan-ip>:5173"
 ```
 
 Scan the QR code in the Even Realities app. For a packaged build, add your server origin to `app.json` → `permissions` → `network.whitelist`, then `npm run pack`.
+
+### Run the server on a Mac (always-on Mac mini)
+
+```bash
+cd server && npm install && npm run build
+npm start                      # or: npx pm2 start dist/server.js --name teleglance
+```
+
+The simulator and a phone on the same Wi-Fi reach it at `http://<mac-lan-ip>:8787`. For access from anywhere, put a tunnel in front of it, e.g. `cloudflared tunnel --url http://localhost:8787`, and use that HTTPS URL as `VITE_API_URL` and in the `app.json` whitelist.
 
 ### Deploy the server (Fly.io)
 

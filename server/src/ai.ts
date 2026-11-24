@@ -2,7 +2,7 @@ import { config } from './config.js'
 import type { ChannelPost, InboxItem, Lang, Settings } from './types.js'
 
 /**
- * All AI calls go through Claude (Anthropic Messages API). Every function has
+ * All AI calls go through one LLM (Otari gateway, Claude or OpenAI). Every function has
  * a small heuristic fallback, so the app keeps working without an API key.
  * Inputs are trimmed: only the message being handled and a few lines of
  * context ever leave the server.
@@ -11,28 +11,42 @@ import type { ChannelPost, InboxItem, Lang, Settings } from './types.js'
 const LANG_NAME: Record<Lang, string> = { en: 'English', de: 'German' }
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
-export const aiEnabled = () => config.anthropic.key.length > 0
+export const aiEnabled = () => config.ai.key.length > 0
 
-async function claudeJSON<T>(system: string, user: string, maxTokens = 600): Promise<T> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': config.anthropic.key,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: config.anthropic.model,
-      max_tokens: maxTokens,
-      system: system + '\nAnswer with one JSON value only, no prose, no code fences.',
-      messages: [{ role: 'user', content: user }],
-    }),
-  })
-  if (!res.ok) throw new Error(`Claude ${res.status}: ${(await res.text()).slice(0, 200)}`)
-  const data = (await res.json()) as { content: { type: string; text?: string }[] }
-  const text = data.content.filter(c => c.type === 'text').map(c => c.text).join('')
+/** Otari keys can belong to another region; the gateway answers 421 and names the host. */
+let regionBase: string | null = null
+
+async function post(base: string, path: string, headers: Record<string, string>, body: unknown) {
+  const res = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  return { res, text: await res.text() }
+}
+
+/** One prompt in, one parsed JSON value out, whichever provider is configured. */
+async function llmJSON<T>(system: string, user: string, maxTokens = 600): Promise<T> {
+  const sys = system + '\nAnswer with one JSON value only, no prose, no code fences.'
+  const { provider, key, model, baseUrl } = config.ai
+  let text: string
+  if (provider === 'anthropic') {
+    const { res, text: raw } = await post(baseUrl, '/messages', { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, {
+      model, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: user }],
+    })
+    if (!res.ok) throw new Error(`Claude ${res.status}: ${raw.slice(0, 200)}`)
+    text = (JSON.parse(raw) as { content: { type: string; text?: string }[] }).content.filter(c => c.type === 'text').map(c => c.text).join('')
+  } else {
+    const body = { model, max_tokens: maxTokens, temperature: 0.4, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }
+    const auth = { authorization: `Bearer ${key}` }
+    let out = await post(regionBase ?? baseUrl, '/chat/completions', auth, body)
+    if (out.res.status === 421 && provider === 'otari') {
+      const host = (out.text.match(/belongs to ([a-z0-9.-]+\.[a-z]{2,})/i) ?? [])[1]
+      if (host) { regionBase = `https://${host}/api/v1`; out = await post(regionBase, '/chat/completions', auth, body) }
+    }
+    if (!out.res.ok) throw new Error(`${provider} ${out.res.status}: ${out.text.slice(0, 200)}`)
+    text = (JSON.parse(out.text) as { choices: { message: { content: string } }[] }).choices[0]?.message?.content ?? ''
+  }
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, '')
   const start = text.search(/[[{]/)
-  return JSON.parse(text.slice(start)) as T
+  const end = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'))
+  return JSON.parse(text.slice(start, end + 1)) as T
 }
 
 // --------------------------------------------------------------- triage ----
@@ -44,7 +58,7 @@ export async function triage(items: InboxItem[], s: Settings): Promise<InboxItem
   if (!aiEnabled()) return items.map(heuristicTriage)
   const batch = items.slice(0, 20)
   try {
-    const out = await claudeJSON<TriageOut[]>(
+    const out = await llmJSON<TriageOut[]>(
       `You triage Telegram messages for a person reading them on smart glasses.
 For each message decide needsYou: true if it asks the reader something, mentions them, sets a deadline, or clearly waits for their reply. Small talk, reactions and FYI posts are false.
 gist: max 45 characters in ${LANG_NAME[s.lang]}, what the reader must know or do (empty string if nothing).
@@ -87,7 +101,7 @@ export async function suggestReplies(
 ): Promise<{ replies: string[]; replyLang: string }> {
   if (!aiEnabled()) return { replies: fallbackReplies(s.lang), replyLang: s.lang }
   try {
-    const out = await claudeJSON<{ replies: string[]; lang: string }>(
+    const out = await llmJSON<{ replies: string[]; lang: string }>(
       `You draft replies the reader can send with one tap from smart glasses.
 Write exactly 3 different replies to the LAST message, each max 55 characters, no emoji, no quotes.
 Cover: a yes/agree option, a specific helpful option, and a polite defer/no option.
@@ -122,7 +136,7 @@ export async function cleanTranscript(raw: string, item: InboxItem | undefined, 
   if (!text) return ''
   if (!aiEnabled()) return text.charAt(0).toUpperCase() + text.slice(1)
   try {
-    const out = await claudeJSON<{ text: string }>(
+    const out = await llmJSON<{ text: string }>(
       `Clean up a dictated chat reply: fix punctuation, numbers ("two" -> "2" for times), filler words and obvious speech-recognition errors.
 Keep the meaning and the speaker's tone; do not add content. Output language: ${replyLang} (translate if needed). Max 300 characters.
 Return {"text": "..."}.`,
@@ -145,7 +159,7 @@ export async function digest(posts: ChannelPost[], s: Settings): Promise<DigestP
     return posts.slice(0, 3).map(p => ({ title: clip(p.text, 40), detail: clip(p.text, 220), sources: [p.chatTitle] }))
   }
   try {
-    return await claudeJSON<DigestPoint[]>(
+    return await llmJSON<DigestPoint[]>(
       `Summarize Telegram channel posts into the 3 most important points for a quick glance on smart glasses.
 Merge posts about the same story and list every channel that reported it in sources.
 title: max 38 characters. detail: max 220 characters, plain facts, no advice. Language: ${LANG_NAME[s.lang]}.
