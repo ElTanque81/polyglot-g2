@@ -113,7 +113,9 @@ npx evenhub qr --url "http://<your-lan-ip>:5173"
 
 Scan the QR code in the Even Realities app. For a packaged build, add your server origin to `app.json` → `permissions` → `network.whitelist`, then `npm run pack`.
 
-### Run the server on a Mac (always-on Mac mini)
+### Run everything on a Mac (always-on Mac mini)
+
+Double-click `start-mac.command`. On first run it creates `server/.env` with a random `SERVER_SECRET`, opens it so you can add your keys, installs everything and starts the server and the app. Or by hand:
 
 ```bash
 cd server && npm install && npm run build

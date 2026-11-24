@@ -1,6 +1,9 @@
 /** Thin client for the TeleGlance server. The token never leaves this device and the server. */
 
-export const API_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ?? 'http://localhost:8787'
+// Default: same host as the app on port 8787 (works for localhost and a phone on the same Wi-Fi).
+export const API_URL: string =
+  (import.meta.env.VITE_API_URL as string | undefined) ||
+  (location.hostname ? `${location.protocol === 'https:' ? 'https:' : 'http:'}//${location.hostname}:8787` : 'http://localhost:8787')
 
 export type Lang = 'en' | 'de'
 export interface Settings { focusChats: string[]; channels: string[]; lang: Lang; style: 'short' | 'friendly' | 'formal'; translate: boolean }
