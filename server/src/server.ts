@@ -5,7 +5,7 @@ import { config, telegramConfigured } from './config.js'
 import * as store from './store.js'
 import { defaultSettings, type InboxItem, type Provider, type Settings } from './types.js'
 import { DemoProvider } from './providers/demo.js'
-import { TelegramProvider, startLogin, verifyLogin } from './providers/telegram.js'
+import { TelegramProvider, startLogin, testConnect, verifyLogin } from './providers/telegram.js'
 import { aiEnabled, cleanTranscript, digest, suggestReplies, triage } from './ai.js'
 import { sttEnabled, transcribe } from './stt.js'
 import { scriptedDigest, scriptedReplies, scriptedTranscript, scriptedTriage } from './providers/demo-script.js'
@@ -67,20 +67,11 @@ app.get('/health', async () => ({
   demo: config.allowDemo,
 }))
 
-/** Network check: can this machine open TCP connections to Telegram's data centres? */
+/** Network check: can this machine complete an MTProto handshake with Telegram? */
 app.get('/diag', async () => {
-  const { connect } = await import('node:net')
-  const probe = (host: string, port: number) => new Promise<{ ok: boolean; ms?: number; error?: string }>(resolve => {
-    const t0 = Date.now()
-    const sock = connect({ host, port })
-    const done = (r: { ok: boolean; ms?: number; error?: string }) => { sock.destroy(); resolve(r) }
-    sock.setTimeout(6000, () => done({ ok: false, error: 'timeout' }))
-    sock.once('connect', () => done({ ok: true, ms: Date.now() - t0 }))
-    sock.once('error', e => done({ ok: false, error: (e as NodeJS.ErrnoException).code ?? e.message }))
-  })
-  const dc2 = '149.154.167.51'
-  const [p443, p80, dc4] = await Promise.all([probe(dc2, 443), probe(dc2, 80), probe('149.154.167.91', 443)])
-  return { telegramConfigured: telegramConfigured(), 'dc2:443': p443, 'dc2:80': p80, 'dc4:443': dc4 }
+  if (!telegramConfigured()) return { telegramConfigured: false }
+  const [port443, port80] = [await testConnect(true), await testConnect(false)]
+  return { telegramConfigured: true, port443, port80 }
 })
 
 // --------------------------------------------------------------- auth ----

@@ -80,6 +80,20 @@ async function connectFresh(): Promise<TelegramClient> {
   throw last instanceof Error ? last : new Error('TELEGRAM_UNREACHABLE')
 }
 
+/** Full MTProto handshake test (used by /diag). */
+export async function testConnect(port443: boolean): Promise<{ ok: boolean; ms?: number; error?: string }> {
+  const t0 = Date.now()
+  const client = newClient('', port443)
+  try {
+    await withTimeout(client.connect(), 12_000, 'timeout')
+    return { ok: true, ms: Date.now() - t0 }
+  } catch (e) {
+    return { ok: false, error: (e as Error).message }
+  } finally {
+    client.disconnect().catch(() => {})
+  }
+}
+
 export async function startLogin(loginId: string, phone: string) {
   let client: TelegramClient | undefined
   try {
