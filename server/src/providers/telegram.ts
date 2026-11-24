@@ -13,9 +13,16 @@ import { config } from '../config.js'
 const quiet = new Logger(LogLevel.ERROR)
 const creds = () => ({ apiId: config.telegram.apiId, apiHash: config.telegram.apiHash })
 
-function newClient(session = '') {
+/**
+ * GramJS in Node opens a raw TCP connection to the first data centre on port 80 by default.
+ * Many home routers, antivirus "web shields" and VPNs break MTProto on port 80, so we use
+ * port 443 first (useWSS=true selects 443; the transport stays plain MTProto over TCP)
+ * and fall back to 80.
+ */
+function newClient(session = '', port443 = true) {
   return new TelegramClient(new StringSession(session), config.telegram.apiId, config.telegram.apiHash, {
-    connectionRetries: 5,
+    connectionRetries: 2,
+    useWSS: port443,
     baseLogger: quiet,
     deviceModel: 'TeleGlance (Even G2)',
     appVersion: '0.1.0',
@@ -56,15 +63,32 @@ setInterval(() => {
 const withTimeout = <T>(p: Promise<T>, ms: number, code: string) =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(code)), ms))])
 
+/** Connects a fresh client, trying port 443 first and then port 80. */
+async function connectFresh(): Promise<TelegramClient> {
+  let last: unknown
+  for (const port443 of [true, false]) {
+    const client = newClient('', port443)
+    try {
+      await withTimeout(client.connect(), 12_000, 'TELEGRAM_UNREACHABLE')
+      return client
+    } catch (e) {
+      last = e
+      console.error(`[telegram] connect via port ${port443 ? 443 : 80} failed:`, (e as Error).message)
+      client.disconnect().catch(() => {})
+    }
+  }
+  throw last instanceof Error ? last : new Error('TELEGRAM_UNREACHABLE')
+}
+
 export async function startLogin(loginId: string, phone: string) {
-  const client = newClient()
+  let client: TelegramClient | undefined
   try {
-    await withTimeout(client.connect(), 20_000, 'TELEGRAM_UNREACHABLE')
+    client = await connectFresh()
     const { phoneCodeHash, isCodeViaApp } = await withTimeout(client.sendCode(creds(), phone), 20_000, 'TELEGRAM_TIMEOUT')
     pending.set(loginId, { client, phone, phoneCodeHash, created: Date.now() })
     return { viaApp: isCodeViaApp }
   } catch (e) {
-    client.disconnect().catch(() => {})
+    client?.disconnect().catch(() => {})
     const code = (e as { errorMessage?: string }).errorMessage ?? (e as Error).message ?? String(e)
     console.error('[auth/start] Telegram said:', code)
     throw Object.assign(new Error(code), { statusCode: 400 })

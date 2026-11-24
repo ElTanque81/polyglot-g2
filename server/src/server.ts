@@ -67,6 +67,22 @@ app.get('/health', async () => ({
   demo: config.allowDemo,
 }))
 
+/** Network check: can this machine open TCP connections to Telegram's data centres? */
+app.get('/diag', async () => {
+  const { connect } = await import('node:net')
+  const probe = (host: string, port: number) => new Promise<{ ok: boolean; ms?: number; error?: string }>(resolve => {
+    const t0 = Date.now()
+    const sock = connect({ host, port })
+    const done = (r: { ok: boolean; ms?: number; error?: string }) => { sock.destroy(); resolve(r) }
+    sock.setTimeout(6000, () => done({ ok: false, error: 'timeout' }))
+    sock.once('connect', () => done({ ok: true, ms: Date.now() - t0 }))
+    sock.once('error', e => done({ ok: false, error: (e as NodeJS.ErrnoException).code ?? e.message }))
+  })
+  const dc2 = '149.154.167.51'
+  const [p443, p80, dc4] = await Promise.all([probe(dc2, 443), probe(dc2, 80), probe('149.154.167.91', 443)])
+  return { telegramConfigured: telegramConfigured(), 'dc2:443': p443, 'dc2:80': p80, 'dc4:443': dc4 }
+})
+
 // --------------------------------------------------------------- auth ----
 
 /** Simple per-IP throttle for login attempts. */
