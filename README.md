@@ -4,6 +4,8 @@
 
 **Telegram in every language, at a glance on Even Realities G2.** Read any message in your language, answer in theirs with one tap or one sentence, and never forget what you promised.
 
+**▶ Demo video: [youtu.be/fKfY8OU5DG0](https://youtu.be/fKfY8OU5DG0)**
+
 Built for the [Heads Up: Even Realities Hackathon](https://dorahacks.io/hackathon/even-realities/detail), **Track 01 · Messaging & News** (also entered for *Best Telegram integration*).
 
 ![An Arabic message translated on the G2 display](docs/screens/3-arabic.png)
