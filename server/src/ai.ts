@@ -1,5 +1,5 @@
 import { config } from './config.js'
-import type { ChannelPost, InboxItem, Lang, Settings } from './types.js'
+import type { ChannelPost, InboxItem, OutgoingMsg, ReadLang, Settings } from './types.js'
 
 /**
  * All AI calls go through one LLM (Otari gateway, Claude or OpenAI). Every function has
@@ -8,7 +8,19 @@ import type { ChannelPost, InboxItem, Lang, Settings } from './types.js'
  * context ever leave the server.
  */
 
-const LANG_NAME: Record<Lang, string> = { en: 'English', de: 'German' }
+export const LANG_NAME: Record<string, string> = {
+  en: 'English', de: 'German', es: 'Spanish', fr: 'French', it: 'Italian', pt: 'Portuguese', nl: 'Dutch', pl: 'Polish',
+  tr: 'Turkish', ru: 'Russian', uk: 'Ukrainian', zh: 'Chinese', ja: 'Japanese', ko: 'Korean', vi: 'Vietnamese', id: 'Indonesian',
+  ar: 'Arabic', hi: 'Hindi', he: 'Hebrew', fa: 'Persian', ur: 'Urdu', th: 'Thai', bn: 'Bengali',
+}
+const nameOf = (l: string) => LANG_NAME[l] ?? l
+
+/**
+ * Scripts the G2 font cannot draw (tested in the Even Hub simulator): Arabic, Hebrew,
+ * Indic and Thai text simply disappears. Such text is always shown translated.
+ */
+const UNRENDERABLE = /[\u0590-\u08FF\u0900-\u0DFF\u0E00-\u0E7F\uFB1D-\uFDFF\uFE70-\uFEFF]/
+export const renderable = (s: string) => !UNRENDERABLE.test(s)
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 
 export const aiEnabled = () => config.ai.key.length > 0
@@ -53,31 +65,35 @@ async function llmJSON<T>(system: string, user: string, maxTokens = 600): Promis
 
 interface TriageOut { i: number; needsYou: boolean; gist: string; lang: string; translation?: string }
 
+/** Must this message be translated for the reader? */
+const wantsTranslation = (lang: string, text: string, s: Settings) => lang !== s.readLang && (s.translate || !renderable(text))
+
 export async function triage(items: InboxItem[], s: Settings): Promise<InboxItem[]> {
   if (items.length === 0) return items
   if (!aiEnabled()) return items.map(heuristicTriage)
   const batch = items.slice(0, 20)
   try {
     const out = await llmJSON<TriageOut[]>(
-      `You triage Telegram messages for a person reading them on smart glasses.
+      `You triage Telegram messages for a person reading them on smart glasses. Messages can be in any language.
 For each message decide needsYou: true if it asks the reader something, mentions them, sets a deadline, or clearly waits for their reply. Small talk, reactions and FYI posts are false.
-gist: max 45 characters in ${LANG_NAME[s.lang]}, what the reader must know or do (empty string if nothing).
+gist: max 45 characters in ${nameOf(s.readLang)}, what the reader must know or do (empty string if nothing).
 lang: ISO 639-1 code of the message.
-translation: ${s.translate ? `only if lang is not "${s.lang}", the message translated into ${LANG_NAME[s.lang]}, max 200 characters` : 'omit'}.
+translation: if lang is not "${s.readLang}", the message translated into ${nameOf(s.readLang)}, max 200 characters, natural wording. Otherwise omit.
 Return an array of {i, needsYou, gist, lang, translation?}.`,
       JSON.stringify(batch.map((m, i) => ({ i, chat: m.chatTitle, type: m.kind, from: m.sender, mentionsReader: m.mentioned, text: clip(m.text, 500) }))),
-      1200,
+      1400,
     )
     const byI = new Map(out.map(o => [o.i, o]))
     return items.map((m, i) => {
       const o = byI.get(i)
       if (!o) return heuristicTriage(m)
+      const lang = (o.lang ?? '').toLowerCase().slice(0, 2)
       return {
         ...m,
         needsYou: !!o.needsYou,
         gist: clip(o.gist ?? '', 50),
-        ...(o.translation && o.lang && o.lang !== s.lang
-          ? { text: o.translation, translated: { from: o.lang, original: m.text } }
+        ...(o.translation && lang && wantsTranslation(lang, m.text, s)
+          ? { text: o.translation, translated: { from: lang, original: m.text } }
           : {}),
       }
     })
@@ -94,58 +110,76 @@ function heuristicTriage(m: InboxItem): InboxItem {
 
 // -------------------------------------------------------------- replies ----
 
+export interface Reply { text: string; meaning: string }
+
+/**
+ * Three one-tap replies, written in the language of the message, each with its
+ * meaning in the reader's language so they know what they are sending.
+ */
 export async function suggestReplies(
   item: InboxItem,
   history: { sender: string; out: boolean; text: string }[],
   s: Settings,
-): Promise<{ replies: string[]; replyLang: string }> {
-  if (!aiEnabled()) return { replies: fallbackReplies(s.lang), replyLang: s.lang }
+): Promise<{ replies: Reply[]; replyLang: string }> {
+  const fb = { replies: fallbackReplies(s.readLang), replyLang: item.translated?.from ?? s.readLang }
+  if (!aiEnabled()) return fb
   try {
-    const out = await llmJSON<{ replies: string[]; lang: string }>(
+    const out = await llmJSON<{ lang: string; replies: { text: string; meaning: string }[] }>(
       `You draft replies the reader can send with one tap from smart glasses.
-Write exactly 3 different replies to the LAST message, each max 55 characters, no emoji, no quotes.
+Write exactly 3 different replies to the LAST message, each max 45 characters, no emoji, no quotes.
 Cover: a yes/agree option, a specific helpful option, and a polite defer/no option.
 Style: ${s.style}. Match how the reader writes in the history ("You" lines).
-Write the replies in the language of the last message (lang = its ISO 639-1 code).
-Return {"replies": [..3], "lang": "xx"}.`,
+Write each reply in the language of the last message (lang = its ISO 639-1 code), natural for a native speaker.
+meaning: the same reply in ${nameOf(s.readLang)}, max 45 characters (identical if lang is ${s.readLang}).
+Return {"lang": "xx", "replies": [{"text": "...", "meaning": "..."}, x3]}.`,
       JSON.stringify({
         chat: item.chatTitle,
         history: history.slice(-8).map(h => `${h.out ? 'You' : h.sender}: ${clip(h.text, 200)}`),
         last: `${item.sender}: ${clip(item.translated?.original ?? item.text, 500)}`,
       }),
-      400,
+      600,
     )
-    const replies = (out.replies ?? []).map(r => clip(String(r).replace(/\s+/g, ' ').trim(), 58)).filter(Boolean).slice(0, 3)
-    return replies.length ? { replies, replyLang: out.lang ?? s.lang } : { replies: fallbackReplies(s.lang), replyLang: s.lang }
+    const replies = (out.replies ?? [])
+      .map(r => ({ text: clip(String(r.text ?? '').replace(/\s+/g, ' ').trim(), 120), meaning: clip(String(r.meaning ?? r.text ?? '').replace(/\s+/g, ' ').trim(), 52) }))
+      .filter(r => r.text)
+      .slice(0, 3)
+    const lang = (out.lang ?? '').toLowerCase().slice(0, 2) || fb.replyLang
+    return replies.length ? { replies, replyLang: lang } : fb
   } catch (e) {
     console.warn('replies fallback:', (e as Error).message)
-    return { replies: fallbackReplies(s.lang), replyLang: s.lang }
+    return fb
   }
 }
 
-const fallbackReplies = (lang: Lang) =>
-  lang === 'de'
+const fallbackReplies = (lang: ReadLang): Reply[] =>
+  (lang === 'de'
     ? ['Ja, mache ich', 'Ich melde mich gleich', 'Passt heute leider nicht']
     : ['Yes, on it', 'I will get back to you shortly', 'Sorry, not today']
+  ).map(t => ({ text: t, meaning: t }))
 
 // ---------------------------------------------------------------- clean ----
 
-/** Turn a raw voice transcript into a sendable message in the chat's language. */
-export async function cleanTranscript(raw: string, item: InboxItem | undefined, replyLang: string): Promise<string> {
+/**
+ * Turn a raw voice transcript (spoken in any language) into a sendable message
+ * in the chat's language, plus its meaning in the reader's language.
+ */
+export async function cleanTranscript(raw: string, item: InboxItem | undefined, replyLang: string, s: Settings): Promise<Reply> {
   const text = raw.trim()
-  if (!text) return ''
-  if (!aiEnabled()) return text.charAt(0).toUpperCase() + text.slice(1)
+  if (!text) return { text: '', meaning: '' }
+  if (!aiEnabled()) { const t = text.charAt(0).toUpperCase() + text.slice(1); return { text: t, meaning: t } }
   try {
-    const out = await llmJSON<{ text: string }>(
-      `Clean up a dictated chat reply: fix punctuation, numbers ("two" -> "2" for times), filler words and obvious speech-recognition errors.
-Keep the meaning and the speaker's tone; do not add content. Output language: ${replyLang} (translate if needed). Max 300 characters.
-Return {"text": "..."}.`,
+    const out = await llmJSON<{ text: string; meaning: string }>(
+      `Turn a dictated chat reply into a clean message: fix punctuation, numbers ("two" -> "2" for times), filler words and obvious speech-recognition errors.
+Keep the meaning and the speaker's tone; do not add content.
+text: the message in ${nameOf(replyLang)} (translate if the speaker used another language), max 300 characters.
+meaning: the same message in ${nameOf(s.readLang)}, max 200 characters.
+Return {"text": "...", "meaning": "..."}.`,
       JSON.stringify({ replyingTo: item ? clip(item.translated?.original ?? item.text, 300) : undefined, transcript: text }),
-      300,
+      500,
     )
-    return clip(out.text?.trim() || text, 300)
+    return { text: clip(out.text?.trim() || text, 300), meaning: clip(out.meaning?.trim() || out.text?.trim() || text, 200) }
   } catch {
-    return text
+    return { text, meaning: text }
   }
 }
 
@@ -155,20 +189,51 @@ export interface DigestPoint { title: string; detail: string; sources: string[] 
 
 export async function digest(posts: ChannelPost[], s: Settings): Promise<DigestPoint[]> {
   if (posts.length === 0) return []
-  if (!aiEnabled()) {
-    return posts.slice(0, 3).map(p => ({ title: clip(p.text, 40), detail: clip(p.text, 220), sources: [p.chatTitle] }))
-  }
+  const fb = () => posts.filter(p => renderable(p.text)).slice(0, 3).map(p => ({ title: clip(p.text, 40), detail: clip(p.text, 220), sources: [p.chatTitle] }))
+  if (!aiEnabled()) return fb()
   try {
     return await llmJSON<DigestPoint[]>(
-      `Summarize Telegram channel posts into the 3 most important points for a quick glance on smart glasses.
-Merge posts about the same story and list every channel that reported it in sources.
-title: max 38 characters. detail: max 220 characters, plain facts, no advice. Language: ${LANG_NAME[s.lang]}.
+      `Summarize Telegram channel posts (any language) into the 3 most important points for a quick glance on smart glasses.
+Merge posts about the same story, even across languages, and list every channel that reported it in sources.
+title: max 38 characters. detail: max 220 characters, plain facts, no advice. Write in ${nameOf(s.readLang)}.
 Return an array of {title, detail, sources}. No financial advice.`,
       JSON.stringify(posts.slice(0, 60).map(p => ({ channel: p.chatTitle, text: clip(p.text, 400) }))),
       900,
     ).then(arr => arr.slice(0, 3).map(p => ({ title: clip(p.title, 42), detail: clip(p.detail, 240), sources: p.sources ?? [] })))
   } catch (e) {
     console.warn('digest fallback:', (e as Error).message)
-    return posts.slice(0, 3).map(p => ({ title: clip(p.text, 40), detail: clip(p.text, 220), sources: [p.chatTitle] }))
+    return fb()
+  }
+}
+
+// ------------------------------------------------------------- promises ----
+
+export interface FoundPromise { i: number; what: string; due: string | null; doneText: string; doneMeaning: string; lang: string }
+
+/**
+ * Finds commitments the user made in their own messages ("I'll send it by 3",
+ * "te llamo mañana") so Polyglot can remind them and close the loop with one tap.
+ */
+export async function findPromises(msgs: OutgoingMsg[], s: Settings, nowIso: string): Promise<FoundPromise[]> {
+  if (!aiEnabled() || msgs.length === 0) return []
+  try {
+    const out = await llmJSON<FoundPromise[]>(
+      `These are messages the reader sent on Telegram (any language). Find concrete commitments the reader made to do something
+(send, call, pay, bring, check, reply, deliver), with or without a time. Ignore vague talk, questions and things already done.
+For each commitment return:
+i: index of the message,
+what: max 40 characters in ${nameOf(s.readLang)}, starting with a verb ("Send Anna the deck"),
+due: ISO 8601 local time if a time/day is stated or clearly implied (now is ${nowIso}), else null,
+lang: ISO 639-1 code of the original message,
+doneText: a short message (max 40 chars) in that language telling the other person it is done,
+doneMeaning: doneText in ${nameOf(s.readLang)}.
+Return an array (empty if none).`,
+      JSON.stringify(msgs.slice(-40).map((m, i) => ({ i, chat: m.chatTitle, text: clip(m.text, 300) }))),
+      900,
+    )
+    return Array.isArray(out) ? out : []
+  } catch (e) {
+    console.warn('promises fallback:', (e as Error).message)
+    return []
   }
 }

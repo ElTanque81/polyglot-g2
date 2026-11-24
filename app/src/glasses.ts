@@ -68,6 +68,10 @@ export function sanitize(s: string): string {
     .trim()
 }
 
+/** Scripts the G2 font cannot draw (Arabic, Hebrew, Indic, Thai): text vanishes on the display. */
+const UNRENDERABLE = /[\u0590-\u08FF\u0900-\u0DFF\u0E00-\u0E7F\uFB1D-\uFDFF\uFE70-\uFEFF]/
+export const renderable = (s: string) => !UNRENDERABLE.test(s)
+
 export function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s
 }
@@ -139,13 +143,13 @@ export class Glasses {
       const r = await this.bridge.createStartUpPageContainer(
         new CreateStartUpPageContainer({ containerTotalNum, textObject, listObject, menuObject } as never),
       )
-      if (r !== 0) console.error('[TeleGlance] startup page failed', r)
+      if (r !== 0) console.error('[Polyglot] startup page failed', r)
       this.started = true
     } else {
       const ok = await this.bridge.rebuildPageContainer(
         new RebuildPageContainer({ containerTotalNum, textObject, listObject, menuObject } as never),
       )
-      if (!ok) console.error('[TeleGlance] rebuild failed', s.layout)
+      if (!ok) console.error('[Polyglot] rebuild failed', s.layout)
     }
     this.current = s
   }

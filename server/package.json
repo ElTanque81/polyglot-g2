@@ -1,7 +1,7 @@
 {
-  "name": "teleglance-server",
+  "name": "polyglot-server",
   "version": "0.1.0",
-  "description": "TeleGlance backend: Telegram (MTProto), Claude and Whisper for Even G2",
+  "description": "Polyglot backend: Telegram (MTProto), Claude and Whisper for Even G2",
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",

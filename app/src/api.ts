@@ -1,4 +1,4 @@
-/** Thin client for the TeleGlance server. The token never leaves this device and the server. */
+/** Thin client for the Polyglot server. The token never leaves this device and the server. */
 
 // Default: same host as the app on port 8787 (works for localhost and a phone on the same Wi-Fi).
 export const API_URL: string =
@@ -6,7 +6,14 @@ export const API_URL: string =
   (location.hostname ? `${location.protocol === 'https:' ? 'https:' : 'http:'}//${location.hostname}:8787` : 'http://localhost:8787')
 
 export type Lang = 'en' | 'de'
-export interface Settings { focusChats: string[]; channels: string[]; lang: Lang; style: 'short' | 'friendly' | 'formal'; translate: boolean }
+export const READ_LANGS = ['en', 'de', 'es', 'fr', 'it', 'pt', 'nl', 'pl', 'tr', 'ru', 'uk', 'zh', 'ja', 'ko', 'vi', 'id'] as const
+export type ReadLang = (typeof READ_LANGS)[number]
+export interface Settings { focusChats: string[]; channels: string[]; lang: Lang; readLang: ReadLang; style: 'short' | 'friendly' | 'formal'; translate: boolean }
+export interface Reply { text: string; meaning: string }
+export interface Commitment {
+  key: string; chatId: string; chatTitle: string; msgId: number; what: string; due: number | null
+  doneText: string; doneMeaning: string; doneLang: string; state: 'open' | 'done' | 'dropped'
+}
 export interface ChatInfo { id: string; title: string; kind: 'user' | 'group' | 'channel'; unread: number }
 export interface InboxItem {
   chatId: string; chatTitle: string; kind: ChatInfo['kind']; msgId: number; sender: string; text: string; date: number
@@ -42,13 +49,17 @@ export const api = {
   me: () => call<{ name: string; provider: string; settings: Settings }>('GET', '/me'),
   chats: () => call<{ chats: ChatInfo[] }>('GET', '/chats'),
   saveSettings: (s: Partial<Settings>) => call<{ settings: Settings }>('PUT', '/settings', s),
-  inbox: () => call<{ items: InboxItem[]; needYou: number }>('GET', '/inbox'),
-  replies: (chatId: string, msgId: number) => call<{ replies: string[]; replyLang: string }>('POST', '/replies', { chatId, msgId }),
+  inbox: () => call<{ items: InboxItem[]; needYou: number; promises: number }>('GET', '/inbox'),
+  replies: (chatId: string, msgId: number) => call<{ replies: Reply[]; replyLang: string }>('POST', '/replies', { chatId, msgId }),
+  promises: () => call<{ promises: Commitment[] }>('GET', '/promises'),
+  promiseDone: (key: string) => call<{ ok: boolean }>('POST', '/promises/done', { key }),
+  promiseSnooze: (key: string, hours: number) => call<{ ok: boolean }>('POST', '/promises/snooze', { key, hours }),
+  promiseDrop: (key: string) => call<{ ok: boolean }>('POST', '/promises/drop', { key }),
   send: (chatId: string, text: string, replyTo?: number) => call<{ ok: boolean; msgId: number }>('POST', '/send', { chatId, text, replyTo }),
   read: (chatId: string, maxId?: number) => call<{ ok: boolean }>('POST', '/read', { chatId, maxId }),
   readAll: () => call<{ ok: boolean }>('POST', '/read-all', {}),
   mute: (chatId: string, hours = 1) => call<{ ok: boolean }>('POST', '/mute', { chatId, hours }),
   digest: () => call<{ points: DigestPoint[]; channels: number; posts: number }>('GET', '/digest'),
   stt: (pcm: Uint8Array, q: { chatId?: string; msgId?: number; lang?: string }) =>
-    call<{ raw: string; text: string }>('POST', `/stt?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`, undefined, pcm),
+    call<{ raw: string; text: string; meaning: string }>('POST', `/stt?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`, undefined, pcm),
 }

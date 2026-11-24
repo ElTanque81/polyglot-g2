@@ -1,7 +1,7 @@
 import { TelegramClient, Api } from 'telegram'
 import { StringSession } from 'telegram/sessions/index.js'
 import { Logger, LogLevel } from 'telegram/extensions/Logger.js'
-import type { ChannelPost, ChatInfo, InboxItem, Provider } from '../types.js'
+import type { ChannelPost, ChatInfo, InboxItem, OutgoingMsg, Provider } from '../types.js'
 import { config } from '../config.js'
 
 /**
@@ -24,7 +24,7 @@ function newClient(session = '', port443 = true) {
     connectionRetries: 2,
     useWSS: port443,
     baseLogger: quiet,
-    deviceModel: 'TeleGlance (Even G2)',
+    deviceModel: 'Polyglot (Even G2)',
     appVersion: '0.1.0',
   })
 }
@@ -215,6 +215,19 @@ export class TelegramProvider implements Provider {
       const msgs = await this.client.getMessages(p, { limit: per })
       const title = (await this.client.getEntity(p) as { title?: string }).title ?? '?'
       for (const m of msgs) if (m.message) out.push({ chatId: id, chatTitle: title, msgId: m.id, text: m.message, date: m.date })
+    }
+    return out
+  }
+
+  async outgoing(chats: string[], since: number): Promise<OutgoingMsg[]> {
+    await this.ready
+    const out: OutgoingMsg[] = []
+    for (const id of chats) {
+      const p = await this.peer(id)
+      const e = (await this.client.getEntity(p)) as { title?: string; firstName?: string; lastName?: string }
+      const title = e.title ?? ([e.firstName, e.lastName].filter(Boolean).join(' ') || '?')
+      const msgs = await this.client.getMessages(p, { limit: 30 })
+      for (const m of msgs) if (m.out && m.message && m.date >= since) out.push({ chatId: id, chatTitle: title, msgId: m.id, text: m.message, date: m.date })
     }
     return out
   }

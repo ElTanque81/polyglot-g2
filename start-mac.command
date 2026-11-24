@@ -1,5 +1,5 @@
 #!/bin/bash
-# TeleGlance on macOS: double-click to start the server (port 8787) and the G2 app (port 5173).
+# Polyglot on macOS: double-click to start the server (port 8787) and the G2 app (port 5173).
 cd "$(dirname "$0")" || exit 1
 
 if ! command -v node >/dev/null 2>&1; then
@@ -36,7 +36,7 @@ trap 'kill $SERVER_PID $APP_PID 2>/dev/null; exit 0' INT TERM
 
 sleep 3
 echo ""
-echo "TeleGlance is running."
+echo "Polyglot is running."
 echo "  Server:            http://$IP:8787/health"
 echo "  App on this Mac:   http://localhost:5173"
 echo "  App for G2 (same Wi-Fi):  cd app && npx evenhub qr --url http://$IP:5173"

@@ -1,20 +1,25 @@
 {
-  "package_id": "com.eltanque81.teleglance",
+  "package_id": "com.eltanque81.polyglot",
   "edition": "202601",
-  "name": "TeleGlance",
+  "name": "Polyglot",
   "version": "0.1.0",
   "min_sdk_version": "0.0.16",
   "entrypoint": "index.html",
   "permissions": [
     {
       "name": "network",
-      "desc": "Talks to the TeleGlance server, which reads your picked Telegram chats and drafts replies.",
-      "whitelist": ["https://teleglance.fly.dev"]
+      "desc": "Talks to the Polyglot server, which reads your picked Telegram chats, translates them and drafts replies.",
+      "whitelist": [
+        "https://polyglot-g2.fly.dev"
+      ]
     },
     {
       "name": "g2-microphone",
       "desc": "Records your voice reply while you hold the touchpad, to turn it into text."
     }
   ],
-  "supported_languages": ["en", "de"]
+  "supported_languages": [
+    "en",
+    "de"
+  ]
 }

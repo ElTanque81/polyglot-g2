@@ -2,7 +2,7 @@ import { waitForEvenAppBridge } from '@evenrealities/even_hub_sdk'
 import { api, setToken, hasToken } from './api'
 import { setLang, type Lang } from './i18n'
 import { Glasses } from './glasses'
-import { TeleGlanceApp } from './app'
+import { PolyglotApp } from './app'
 import { PhonePage } from './phone'
 
 const bridge = await waitForEvenAppBridge()
@@ -17,27 +17,35 @@ async function save(key: string, value: string) {
   try { window.localStorage.setItem(key, value) } catch { /* ignore */ }
 }
 
-const storedLang = (await load('tg.lang')) as Lang
+const storedLang = (await load('pg.lang')) as Lang
 setLang(storedLang === 'de' || storedLang === 'en' ? storedLang : navigator.language?.toLowerCase().startsWith('de') ? 'de' : 'en')
-setToken(await load('tg.token'))
+setToken(await load('pg.token'))
 
 // `?demo` signs into the keyless demo account (simulator runs, judges).
 if (new URLSearchParams(location.search).has('demo')) {
   const valid = hasToken() && (await api.me().then(() => true, () => false))
   if (!valid) {
-    try { const { token } = await api.demo(); setToken(token); await save('tg.token', token) } catch (e) { console.error(e) }
+    try { const { token } = await api.demo(); setToken(token); await save('pg.token', token) } catch (e) { console.error(e) }
   }
 }
 
+// Language messages are translated into (from the account settings).
+let readLang = 'en'
+async function loadReadLang() {
+  if (!hasToken()) return
+  try { readLang = (await api.me()).settings.readLang ?? readLang } catch { /* offline or signed out */ }
+}
+await loadReadLang()
+
 const glasses = new Glasses(bridge)
-const app = new TeleGlanceApp(glasses, hasToken)
+const app = new PolyglotApp(glasses, hasToken, () => readLang)
 
 const phone = new PhonePage(document.getElementById('app')!, {
-  saveToken: t => save('tg.token', t),
-  saveLang: l => save('tg.lang', l),
-  onChange: () => { app.reload().catch(err => console.error(err)) },
+  saveToken: t => save('pg.token', t),
+  saveLang: l => save('pg.lang', l),
+  onChange: () => { loadReadLang().then(() => app.reload()).catch(err => console.error(err)) },
 })
 
 await app.start()
 await phone.show(hasToken())
-console.log('[TeleGlance] ready')
+console.log('[Polyglot] ready')

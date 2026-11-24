@@ -1,8 +1,8 @@
-import type { ChannelPost, ChatInfo, InboxItem, Provider } from '../types.js'
+import type { ChannelPost, ChatInfo, InboxItem, OutgoingMsg, Provider } from '../types.js'
 
 /**
  * Keyless demo backend with scripted chats. Used for the simulator demo and
- * for judges who want to try TeleGlance without a Telegram login.
+ * for judges who want to try Polyglot without a Telegram login.
  * All names and messages are fictional.
  */
 
@@ -30,16 +30,26 @@ function seed(): Chat[] {
       ],
     },
     {
-      id: '1003', title: 'Family', kind: 'group', unread: 0, readUpTo: 0, mutedUntil: 0,
+      id: '1005', title: 'Omar', kind: 'user', unread: 0, readUpTo: 0, mutedUntil: 0,
       msgs: [
-        { id: 1, sender: 'Mia', out: false, text: 'Photos from the weekend are in the shared album 📸', date: t - 2400 },
-        { id: 2, sender: 'Mia', out: false, text: 'Who is bringing dessert on Sunday?', date: t - 2300 },
+        { id: 1, sender: 'Omar', out: false, text: 'مرحبا! هل ما زلنا على موعد العشاء يوم الخميس في دبي مارينا؟', date: t - 1500 },
       ],
     },
     {
-      id: '1004', title: 'Lena', kind: 'user', unread: 0, readUpTo: 0, mutedUntil: 0,
+      id: '1003', title: 'Family', kind: 'group', unread: 0, readUpTo: 2, mutedUntil: 0,
       msgs: [
-        { id: 1, sender: 'Lena', out: false, text: 'Haha that meme was great', date: t - 5000 },
+        { id: 1, sender: 'You', out: true, text: "I'll call grandma tonight and ask her about Sunday", date: t - 9000 },
+        { id: 2, sender: 'Tom', out: false, text: 'Thanks!', date: t - 8900 },
+        { id: 3, sender: 'Mia', out: false, text: 'Photos from the weekend are in the shared album 📸', date: t - 2400 },
+        { id: 4, sender: 'Mia', out: false, text: 'Who is bringing dessert on Sunday?', date: t - 2300 },
+      ],
+    },
+    {
+      id: '1004', title: 'Lena', kind: 'user', unread: 0, readUpTo: 2, mutedUntil: 0,
+      msgs: [
+        { id: 1, sender: 'Lena', out: false, text: 'Do you still have the link to that hotel in Lisbon?', date: t - 20000 },
+        { id: 2, sender: 'You', out: true, text: 'Yes! I will send you the hotel link tomorrow morning', date: t - 19800 },
+        { id: 3, sender: 'Lena', out: false, text: 'Haha that meme was great', date: t - 5000 },
       ],
     },
     {
@@ -62,6 +72,13 @@ function seed(): Chat[] {
       msgs: [
         { id: 1, sender: 'DAO News', out: false, text: 'Governance vote #42 passed: treasury diversification into stablecoins.', date: t - 4000 },
         { id: 2, sender: 'DAO News', out: false, text: 'Snapshot for the airdrop: Friday. Hold tokens in a self-custody wallet.', date: t - 800 },
+      ],
+    },
+    {
+      id: '2004', title: 'Крипто Новости', kind: 'channel', unread: 0, readUpTo: 0, mutedUntil: 0,
+      msgs: [
+        { id: 1, sender: 'Крипто Новости', out: false, text: 'Снапшот аирдропа DAO в пятницу в 12:00 UTC. Держите токены в своём кошельке.', date: t - 1200 },
+        { id: 2, sender: 'Крипто Новости', out: false, text: 'Притоки в спотовые биткоин-ETF — максимум с марта.', date: t - 600 },
       ],
     },
   ]
@@ -106,6 +123,12 @@ export class DemoProvider implements Provider {
     return this.chats
       .filter(c => channels.includes(c.id))
       .flatMap(c => c.msgs.slice(-per).map(m => ({ chatId: c.id, chatTitle: c.title, msgId: m.id, text: m.text, date: m.date })))
+  }
+
+  async outgoing(chats: string[], since: number): Promise<OutgoingMsg[]> {
+    return this.chats
+      .filter(c => chats.includes(c.id))
+      .flatMap(c => c.msgs.filter(m => m.out && m.date >= since).map(m => ({ chatId: c.id, chatTitle: c.title, msgId: m.id, text: m.text, date: m.date })))
   }
 
   async send(chatId: string, text: string) {

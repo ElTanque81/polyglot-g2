@@ -2,7 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { mkdirSync, readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { config } from './config.js'
-import { defaultSettings, type Settings } from './types.js'
+import { defaultSettings, type Commitment, type Settings } from './types.js'
 
 /**
  * Tiny file store. Telegram session strings are encrypted with AES-256-GCM
@@ -16,6 +16,10 @@ export interface Account {
   session?: string
   settings: Settings
   createdAt: number
+  /** promise tracker state, keyed chatId:msgId */
+  commitments?: Record<string, Commitment>
+  /** outgoing message keys already scanned for promises */
+  scanned?: string[]
 }
 
 type DB = Record<string, Account> // key = sha256(token)
@@ -73,6 +77,15 @@ export function updateSettings(token: string, patch: Partial<Settings>): Setting
   acc.settings = { ...defaultSettings(), ...acc.settings, ...patch }
   save()
   return acc.settings
+}
+
+/** Change an account in place and persist it. */
+export function mutate<T>(token: string, fn: (acc: Account) => T): T {
+  const acc = getAccount(token)
+  if (!acc) throw Object.assign(new Error('unauthorized'), { statusCode: 401 })
+  const r = fn(acc)
+  save()
+  return r
 }
 
 export function deleteAccount(token: string) {

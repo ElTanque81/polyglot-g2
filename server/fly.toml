@@ -1,5 +1,5 @@
-# fly launch --no-deploy --copy-config ; fly volumes create teleglance_data --size 1 ; fly secrets set ... ; fly deploy
-app = "teleglance"
+# fly launch --no-deploy --copy-config ; fly volumes create polyglot_data --size 1 ; fly secrets set ... ; fly deploy
+app = "polyglot-g2"
 primary_region = "fra"
 
 [build]
@@ -9,7 +9,7 @@ primary_region = "fra"
   DATA_DIR = "/data"
 
 [mounts]
-  source = "teleglance_data"
+  source = "polyglot_data"
   destination = "/data"
 
 [http_service]

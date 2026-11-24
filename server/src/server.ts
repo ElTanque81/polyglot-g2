@@ -3,12 +3,12 @@ import cors from '@fastify/cors'
 import { randomUUID } from 'node:crypto'
 import { config, telegramConfigured } from './config.js'
 import * as store from './store.js'
-import { defaultSettings, type InboxItem, type Provider, type Settings } from './types.js'
+import { defaultSettings, READ_LANGS, type Commitment, type InboxItem, type Provider, type ReadLang, type Settings } from './types.js'
 import { DemoProvider } from './providers/demo.js'
 import { TelegramProvider, startLogin, testConnect, verifyLogin } from './providers/telegram.js'
-import { aiEnabled, cleanTranscript, digest, suggestReplies, triage } from './ai.js'
+import { aiEnabled, cleanTranscript, digest, findPromises, suggestReplies, triage } from './ai.js'
 import { sttEnabled, transcribe } from './stt.js'
-import { scriptedDigest, scriptedReplies, scriptedTranscript, scriptedTriage } from './providers/demo-script.js'
+import { scriptedDigest, scriptedPromises, scriptedReplies, scriptedTranscript, scriptedTriage } from './providers/demo-script.js'
 
 store.load()
 
@@ -58,7 +58,7 @@ app.setErrorHandler((err: Error & { statusCode?: number }, _req, reply: FastifyR
 
 // --------------------------------------------------------------- meta ----
 
-app.get('/', async () => ({ name: 'TeleGlance server', ok: true }))
+app.get('/', async () => ({ name: 'Polyglot server', ok: true }))
 app.get('/health', async () => ({
   ok: true,
   telegram: telegramConfigured(),
@@ -111,7 +111,7 @@ app.post('/auth/demo', async () => {
   const token = store.newToken()
   store.putAccount(token, {
     kind: 'demo',
-    settings: { ...defaultSettings(), focusChats: ['1001', '1002', '1003'], channels: ['2001', '2002', '2003'] },
+    settings: { ...defaultSettings(), focusChats: ['1001', '1005', '1002', '1003', '1004'], channels: ['2001', '2002', '2003', '2004'] },
     createdAt: Date.now(),
   })
   return { ok: true, token }
@@ -141,6 +141,7 @@ app.put<{ Body: Partial<Settings> }>('/settings', async req => {
   if (Array.isArray(b.focusChats)) patch.focusChats = b.focusChats.map(String).slice(0, 50)
   if (Array.isArray(b.channels)) patch.channels = b.channels.map(String).slice(0, 30)
   if (b.lang === 'en' || b.lang === 'de') patch.lang = b.lang
+  if (typeof b.readLang === 'string' && (READ_LANGS as readonly string[]).includes(b.readLang)) patch.readLang = b.readLang as ReadLang
   if (b.style === 'short' || b.style === 'friendly' || b.style === 'formal') patch.style = b.style
   if (typeof b.translate === 'boolean') patch.translate = b.translate
   return { settings: store.updateSettings(token, patch) }
@@ -153,14 +154,14 @@ app.get('/inbox', async req => {
   const raw = await l.provider.inbox(settings.focusChats)
   const fresh = raw.filter(m => !l.triaged.has(key(m)))
   if (fresh.length) {
-    const done = scripted(l) ? scriptedTriage(fresh, settings.lang) : await triage(fresh, settings)
+    const done = scripted(l) ? scriptedTriage(fresh, settings.readLang) : await triage(fresh, settings)
     for (const m of done) l.triaged.set(key(m), m)
   }
   const items = raw.map(m => l.triaged.get(key(m)) ?? m)
   // Needs-you first, then newest first.
   items.sort((a, b) => Number(!!b.needsYou) - Number(!!a.needsYou) || b.date - a.date)
   l.inbox = items
-  return { items, needYou: items.filter(i => i.needsYou).length }
+  return { items, needYou: items.filter(i => i.needsYou).length, promises: openPromises(req).length }
 })
 
 function findItem(l: Live, chatId: string, msgId: number) {
@@ -172,7 +173,7 @@ function findItem(l: Live, chatId: string, msgId: number) {
 app.post<{ Body: { chatId: string; msgId: number } }>('/replies', async req => {
   const { settings, live: l } = auth(req)
   const item = findItem(l, String(req.body.chatId), Number(req.body.msgId))
-  if (scripted(l)) { const r = scriptedReplies(item.chatId, item.msgId); if (r) return r }
+  if (scripted(l)) { const r = scriptedReplies(item.chatId, item.msgId, settings.readLang); if (r) return r }
   const history = await l.provider.history(item.chatId, 10)
   return suggestReplies(item, history, settings)
 })
@@ -218,14 +219,86 @@ app.post<{ Querystring: { chatId?: string; msgId?: string; lang?: string } }>('/
   const pcm = req.body as Buffer
   if (!Buffer.isBuffer(pcm)) throw Object.assign(new Error('SEND_PCM_AS_OCTET_STREAM'), { statusCode: 415 })
   const item = req.query.chatId ? l.inbox.find(i => i.chatId === req.query.chatId && i.msgId === Number(req.query.msgId)) : undefined
-  const replyLang = req.query.lang || item?.translated?.from || settings.lang
+  const replyLang = req.query.lang || item?.translated?.from || settings.readLang
   if (!sttEnabled()) {
     if (l.provider.name !== 'demo') throw Object.assign(new Error('STT_NOT_CONFIGURED'), { statusCode: 503 })
-    const s = scriptedTranscript(req.query.chatId, Number(req.query.msgId)) // demo without STT key
-    return { raw: s.raw, text: aiEnabled() ? await cleanTranscript(s.raw, item, replyLang) : s.text }
+    const s = scriptedTranscript(req.query.chatId, Number(req.query.msgId), settings.readLang) // demo without STT key
+    return aiEnabled() ? { raw: s.raw, ...(await cleanTranscript(s.raw, item, replyLang, settings)) } : s
   }
   const raw = await transcribe(pcm)
-  return { raw, text: await cleanTranscript(raw, item, replyLang) }
+  return { raw, ...(await cleanTranscript(raw, item, replyLang, settings)) }
+})
+
+// ------------------------------------------------------------- promises ----
+
+const nowS = () => Math.floor(Date.now() / 1000)
+
+function openPromises(req: FastifyRequest): Commitment[] {
+  const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+  const acc = store.getAccount(token)
+  return Object.values(acc?.commitments ?? {})
+    .filter(c => c.state === 'open' && (!c.snoozedUntil || c.snoozedUntil <= nowS()))
+    .sort((a, b) => (a.due ?? Infinity) - (b.due ?? Infinity) || b.createdAt - a.createdAt)
+}
+
+/** Scans the user's recent own messages for new promises, then lists the open ones. */
+app.get('/promises', async req => {
+  const { token, settings, live: l } = auth(req)
+  const acc = store.getAccount(token)!
+  const scanned = new Set(acc.scanned ?? [])
+  const recent = await l.provider.outgoing(settings.focusChats, nowS() - 72 * 3600)
+  const fresh = recent.filter(m => !scanned.has(`${m.chatId}:${m.msgId}`))
+  if (fresh.length) {
+    const found = scripted(l) ? scriptedPromises(fresh, settings.readLang, new Date()) : await findPromises(fresh, settings, new Date().toISOString())
+    store.mutate(token, a => {
+      a.commitments ??= {}
+      for (const f of found) {
+        const m = fresh[f.i]
+        if (!m || !f.what) continue
+        const key = `${m.chatId}:${m.msgId}`
+        if (a.commitments[key]) continue
+        const due = f.due ? Math.floor(Date.parse(f.due) / 1000) : NaN
+        a.commitments[key] = {
+          key, chatId: m.chatId, chatTitle: m.chatTitle, msgId: m.msgId,
+          what: String(f.what).slice(0, 60), due: Number.isFinite(due) ? due : null,
+          doneText: String(f.doneText || 'Done!').slice(0, 120), doneMeaning: String(f.doneMeaning || f.doneText || 'Done!').slice(0, 80),
+          doneLang: String(f.lang || settings.readLang).slice(0, 2), state: 'open', createdAt: nowS(),
+        }
+      }
+      a.scanned = [...scanned, ...fresh.map(m => `${m.chatId}:${m.msgId}`)].slice(-500)
+    })
+  }
+  return { promises: openPromises(req) }
+})
+
+function promiseFor(token: string, key: string) {
+  const c = store.getAccount(token)?.commitments?.[key]
+  if (!c) throw Object.assign(new Error('PROMISE_NOT_FOUND'), { statusCode: 404 })
+  return c
+}
+
+/** Marks a promise done and tells the other person, in their language. */
+app.post<{ Body: { key: string; send?: boolean } }>('/promises/done', async req => {
+  const { token, live: l } = auth(req)
+  const c = promiseFor(token, String(req.body.key))
+  if (req.body.send !== false) await l.provider.send(c.chatId, c.doneText, c.msgId)
+  store.mutate(token, a => { a.commitments![c.key].state = 'done' })
+  return { ok: true }
+})
+
+app.post<{ Body: { key: string; hours?: number } }>('/promises/snooze', async req => {
+  const { token } = auth(req)
+  const c = promiseFor(token, String(req.body.key))
+  const hours = Math.min(Math.max(Number(req.body.hours ?? 1), 0.25), 72)
+  store.mutate(token, a => { a.commitments![c.key].snoozedUntil = nowS() + Math.round(hours * 3600) })
+  return { ok: true }
+})
+
+app.post<{ Body: { key: string } }>('/promises/drop', async req => {
+  const { token } = auth(req)
+  const c = promiseFor(token, String(req.body.key))
+  store.mutate(token, a => { a.commitments![c.key].state = 'dropped' })
+  return { ok: true }
 })
 
 await app.listen({ port: config.port, host: config.host })

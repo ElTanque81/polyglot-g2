@@ -1,4 +1,4 @@
-import { api, ApiError, setToken, type ChatInfo, type Settings } from './api'
+import { api, ApiError, setToken, READ_LANGS, type ChatInfo, type Settings } from './api'
 import { getLang, setLang, type Lang } from './i18n'
 
 /**
@@ -9,7 +9,7 @@ import { getLang, setLang, type Lang } from './i18n'
 
 const T = {
   en: {
-    title: 'TeleGlance', tagline: 'Your Telegram, at a glance on Even G2.',
+    title: 'Polyglot', tagline: 'Telegram in every language, at a glance on Even G2.',
     signInTitle: 'Sign in with Telegram', phone: 'Phone number (with country code)', sendCode: 'Send code',
     code: 'Code from Telegram', password: '2-step verification password', verify: 'Sign in',
     demo: 'Try the demo (no login)', or: 'or',
@@ -20,13 +20,14 @@ const T = {
     short: 'Short', friendly: 'Friendly', formal: 'Formal',
     save: 'Save', saved: 'Saved. Your glasses are updated.', logout: 'Sign out and delete session',
     signedInAs: (n: string, p: string) => `Signed in as ${n}${p === 'demo' ? ' (demo)' : ''}`,
-    privacy: 'Messages are never stored. Only the chats you pick are read. Your Telegram session is encrypted on the TeleGlance server; signing out deletes it.',
+    privacy: 'Messages are never stored. Only the chats you pick are read. Your Telegram session is encrypted on the Polyglot server; signing out deletes it.',
+    readLang: 'Read my messages in', readHint: 'Messages in other languages are translated into this one. Replies go out in the sender\'s language.',
     search: 'Search chats', err: (e: string) => `Error: ${e}`, noTg: 'Telegram login is not configured on this server (TG_API_ID / TG_API_HASH missing in server/.env). Use the demo.',
     sending: 'Asking Telegram for a code…', checking: 'Signing in…', changeNumber: 'Use another number',
-    switchAccount: 'Sign out / switch to Telegram', serverDown: 'Cannot reach the TeleGlance server. Is start-mac.command running?',
+    switchAccount: 'Sign out / switch to Telegram', serverDown: 'Cannot reach the Polyglot server. Is start-mac.command running?',
   },
   de: {
-    title: 'TeleGlance', tagline: 'Dein Telegram, auf einen Blick in der Even G2.',
+    title: 'Polyglot', tagline: 'Telegram in jeder Sprache, auf einen Blick in der Even G2.',
     signInTitle: 'Mit Telegram anmelden', phone: 'Telefonnummer (mit Ländervorwahl)', sendCode: 'Code senden',
     code: 'Code von Telegram', password: 'Passwort der Zwei-Schritt-Bestätigung', verify: 'Anmelden',
     demo: 'Demo ausprobieren (ohne Login)', or: 'oder',
@@ -37,13 +38,20 @@ const T = {
     short: 'Kurz', friendly: 'Freundlich', formal: 'Förmlich',
     save: 'Speichern', saved: 'Gespeichert. Die Brille ist aktualisiert.', logout: 'Abmelden und Sitzung löschen',
     signedInAs: (n: string, p: string) => `Angemeldet als ${n}${p === 'demo' ? ' (Demo)' : ''}`,
-    privacy: 'Nachrichten werden nie gespeichert. Nur die gewählten Chats werden gelesen. Deine Telegram-Sitzung liegt verschlüsselt auf dem TeleGlance-Server; Abmelden löscht sie.',
+    privacy: 'Nachrichten werden nie gespeichert. Nur die gewählten Chats werden gelesen. Deine Telegram-Sitzung liegt verschlüsselt auf dem Polyglot-Server; Abmelden löscht sie.',
+    readLang: 'Nachrichten lesen auf', readHint: 'Nachrichten in anderen Sprachen werden hierhin übersetzt. Antworten gehen in der Sprache des Absenders raus.',
     search: 'Chats suchen', err: (e: string) => `Fehler: ${e}`, noTg: 'Telegram-Login ist auf diesem Server nicht eingerichtet (TG_API_ID / TG_API_HASH fehlen in server/.env). Nutze die Demo.',
     sending: 'Telegram schickt dir einen Code…', checking: 'Anmeldung läuft…', changeNumber: 'Andere Nummer verwenden',
-    switchAccount: 'Abmelden / zu Telegram wechseln', serverDown: 'TeleGlance-Server nicht erreichbar. Läuft start-mac.command?',
+    switchAccount: 'Abmelden / zu Telegram wechseln', serverDown: 'Polyglot-Server nicht erreichbar. Läuft start-mac.command?',
   },
 }
 const L = () => T[getLang()]
+
+/** Language names in their own language. */
+const LANG_LABEL: Record<(typeof READ_LANGS)[number], string> = {
+  en: 'English', de: 'Deutsch', es: 'Español', fr: 'Français', it: 'Italiano', pt: 'Português', nl: 'Nederlands', pl: 'Polski',
+  tr: 'Türkçe', ru: 'Русский', uk: 'Українська', zh: '中文', ja: '日本語', ko: '한국어', vi: 'Tiếng Việt', id: 'Bahasa Indonesia',
+}
 
 /** Turns Telegram/server error codes into a sentence the user can act on. */
 function friendly(code: string): string {
@@ -164,7 +172,7 @@ export class PhonePage {
   private async signedIn(token: string) {
     setToken(token)
     await this.hooks.saveToken(token)
-    await api.saveSettings({ lang: getLang() }).catch(() => {})
+    await api.saveSettings({ lang: getLang(), readLang: getLang() }).catch(() => {})
     this.step = 'phone'
     this.hooks.onChange()
     await this.show(true)
@@ -185,6 +193,8 @@ export class PhonePage {
       <section><h2>${L().channelsTitle}</h2><p class="hint">${L().channelsHint}</p>
         ${channels.filter(match).slice(0, 60).map(c => row(c, 'c', s.channels.includes(c.id))).join('')}</section>
       <section><h2>${L().prefs}</h2>
+        <label>${L().readLang}<select id="readLang">${READ_LANGS.map(v => `<option value="${v}" ${s.readLang === v ? 'selected' : ''}>${LANG_LABEL[v]}</option>`).join('')}</select></label>
+        <p class="hint">${L().readHint}</p>
         <label>${L().style}<select id="style">${(['short', 'friendly', 'formal'] as const).map(v => `<option value="${v}" ${s.style === v ? 'selected' : ''}>${L()[v]}</option>`).join('')}</select></label>
         <label class="chat"><input type="checkbox" id="translate" ${s.translate ? 'checked' : ''}><span>${L().translate}</span></label>
       </section>
@@ -223,6 +233,8 @@ export class PhonePage {
       if (b.checked && !has) list.push(b.value)
       if (!b.checked && has) list.splice(list.indexOf(b.value), 1)
     }
+    const rl = this.root.querySelector<HTMLSelectElement>('#readLang')
+    if (rl) s.readLang = rl.value as Settings['readLang']
     const style = this.root.querySelector<HTMLSelectElement>('#style')
     if (style) s.style = style.value as Settings['style']
     const tr = this.root.querySelector<HTMLInputElement>('#translate')
