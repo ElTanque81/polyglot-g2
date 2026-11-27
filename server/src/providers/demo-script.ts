@@ -1,4 +1,4 @@
-import type { InboxItem, OutgoingMsg, ReadLang } from '../types.js'
+import type { InboxItem, OutgoingMsg, ReadLang, Register } from '../types.js'
 import type { DigestPoint, FoundPromise, Reply } from '../ai.js'
 
 /**
@@ -15,7 +15,10 @@ interface Script {
   gist: L2
   translation?: { from: string; text: L2 }
   replyLang: string
+  register: 'formal' | 'casual'
   replies: { text: string; meaning: L2 }[]
+  /** replies in the other register, used when the user overrides it */
+  alt?: { text: string; meaning: L2 }[]
   transcript: { raw: string; text: string; meaning: L2 }
 }
 
@@ -25,7 +28,7 @@ const S: Record<string, Script> = {
   '1001:4': {
     needsYou: true,
     gist: { en: 'Needs the deck before 3pm', de: 'Braucht das Deck vor 15 Uhr' },
-    replyLang: 'en',
+    replyLang: 'en', register: 'casual',
     replies: [
       same('Sure, sending it in 10 minutes', 'Klar, schicke es in 10 Minuten'),
       same('On it, you will have it by 2:30', 'Mache ich, du hast es bis 14:30'),
@@ -36,7 +39,7 @@ const S: Record<string, Script> = {
   '1001:6': {
     needsYou: true,
     gist: { en: 'Asks you to join the 3:30 call', de: 'Fragt, ob du um 15:30 dabei bist' },
-    replyLang: 'en',
+    replyLang: 'en', register: 'casual',
     replies: [
       same('Yes, I will join at 3:30', 'Ja, ich bin um 15:30 dabei'),
       same('I can join for the first 15 min', 'Ich kann die ersten 15 Min dabei sein'),
@@ -48,7 +51,7 @@ const S: Record<string, Script> = {
     needsYou: true,
     gist: { en: 'Confirm tomorrow 10am at the office', de: 'Morgen 10 Uhr im Büro bestätigen' },
     translation: { from: 'es', text: { en: 'Are we still on for tomorrow at 10 at the office?', de: 'Bleibt es bei morgen um 10 im Büro?' } },
-    replyLang: 'es',
+    replyLang: 'es', register: 'casual',
     replies: [
       { text: 'Sí, nos vemos a las 10', meaning: { en: 'Yes, see you at 10', de: 'Ja, wir sehen uns um 10' } },
       { text: '¿Podemos pasarlo a las 11?', meaning: { en: 'Can we move it to 11?', de: 'Können wir auf 11 verschieben?' } },
@@ -56,11 +59,28 @@ const S: Record<string, Script> = {
     ],
     transcript: { raw: 'yes see you at ten I will bring coffee', text: 'Sí, nos vemos a las 10. Llevo café.', meaning: { en: 'Yes, see you at 10. I will bring coffee.', de: 'Ja, bis um 10. Ich bringe Kaffee mit.' } },
   },
+  '1006:1': {
+    needsYou: true,
+    gist: { en: 'Client wants the meeting deck today', de: 'Kunde will die Unterlagen heute' },
+    translation: { from: 'ja', text: { en: 'Could you kindly send the materials for tomorrow\'s meeting by today?', de: 'Könnten Sie mir die Unterlagen für das morgige Meeting bitte heute noch senden?' } },
+    replyLang: 'ja', register: 'formal',
+    replies: [
+      { text: '承知いたしました。本日中にお送りいたします。', meaning: { en: 'Certainly. I will send them today.', de: 'Selbstverständlich, ich sende sie heute.' } },
+      { text: '17時までにお送りいたします。', meaning: { en: 'I will send them by 5 pm.', de: 'Ich sende sie bis 17 Uhr.' } },
+      { text: '申し訳ございません、明朝でもよろしいでしょうか。', meaning: { en: 'Sorry, would tomorrow morning be OK?', de: 'Entschuldigung, ginge auch morgen früh?' } },
+    ],
+    alt: [
+      { text: 'OK、今日中に送るね！', meaning: { en: 'OK, will send it today!', de: 'Ok, schicke ich heute!' } },
+      { text: '5時までに送るよ', meaning: { en: "I'll send it by 5", de: 'Schicke ich bis 5' } },
+      { text: 'ごめん、明日の朝でもいい？', meaning: { en: 'Sorry, is tomorrow morning ok?', de: 'Sorry, geht morgen früh?' } },
+    ],
+    transcript: { raw: 'yes I will send the materials before five today', text: '承知いたしました。本日17時までに資料をお送りいたします。', meaning: { en: 'Certainly. I will send the materials today by 5 pm.', de: 'Selbstverständlich. Ich sende die Unterlagen heute bis 17 Uhr.' } },
+  },
   '1005:1': {
     needsYou: true,
     gist: { en: 'Confirm Thursday dinner, Dubai Marina', de: 'Abendessen Do. in Dubai Marina bestätigen' },
     translation: { from: 'ar', text: { en: 'Hi! Are we still on for dinner on Thursday at Dubai Marina?', de: 'Hallo! Bleibt es beim Abendessen am Donnerstag in Dubai Marina?' } },
-    replyLang: 'ar',
+    replyLang: 'ar', register: 'casual',
     replies: [
       { text: 'نعم، أراك يوم الخميس!', meaning: { en: 'Yes, see you Thursday!', de: 'Ja, bis Donnerstag!' } },
       { text: 'نعم، هل الساعة الثامنة مناسبة؟', meaning: { en: 'Yes, does 8pm work?', de: 'Ja, passt 20 Uhr?' } },
@@ -71,7 +91,7 @@ const S: Record<string, Script> = {
   '1003:4': {
     needsYou: false,
     gist: { en: 'Family asks who brings dessert Sunday', de: 'Wer bringt Sonntag den Nachtisch?' },
-    replyLang: 'en',
+    replyLang: 'en', register: 'casual',
     replies: [
       same('I will bring dessert', 'Ich bringe den Nachtisch mit'),
       same('I can bring drinks instead', 'Ich bringe lieber Getränke'),
@@ -82,7 +102,7 @@ const S: Record<string, Script> = {
   '1003:3': {
     needsYou: false,
     gist: { en: 'New weekend photos in the album', de: 'Neue Wochenend-Fotos im Album' },
-    replyLang: 'en',
+    replyLang: 'en', register: 'casual',
     replies: [same('Great photos, thanks!', 'Tolle Fotos, danke!'), same('Love them', 'Super schön'), same('Will look tonight', 'Schaue ich heute Abend an')],
     transcript: { raw: 'they look great', text: 'They look great!', meaning: { en: 'They look great!', de: 'Sehen toll aus!' } },
   },
@@ -101,9 +121,13 @@ export function scriptedTriage(items: InboxItem[], lang: ReadLang): InboxItem[] 
   })
 }
 
-export const scriptedReplies = (chatId: string, msgId: number, lang: ReadLang): { replies: Reply[]; replyLang: string } | undefined => {
+export const scriptedReplies = (chatId: string, msgId: number, lang: ReadLang, override?: Register) => {
   const s = S[`${chatId}:${msgId}`]
-  return s ? { replyLang: s.replyLang, replies: s.replies.map(r => ({ text: r.text, meaning: pick(lang, r.meaning) })) } : undefined
+  if (!s) return undefined
+  const flip = override && override !== 'auto' && override !== s.register && s.alt
+  const list = flip ? s.alt! : s.replies
+  const register = flip ? (override as 'formal' | 'casual') : s.register
+  return { replyLang: s.replyLang, register, replies: list.map(r => ({ text: r.text, meaning: pick(lang, r.meaning) })) as Reply[] }
 }
 
 export const scriptedTranscript = (chatId: string | undefined, msgId: number | undefined, lang: ReadLang) => {

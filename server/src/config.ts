@@ -37,6 +37,15 @@ export const config = {
     provider: process.env.STT_PROVIDER ?? 'groq',
     key: (process.env.STT_API_KEY ?? process.env.GROQ_API_KEY ?? '').trim(),
   },
+  /**
+   * Prices for the cost meter (USD). Defaults: Qwen3 235B Instruct 2507 list price on
+   * OpenRouter and Groq whisper-large-v3-turbo (billed with a 10 s minimum per request).
+   */
+  prices: {
+    llmInPerM: num(process.env.PRICE_LLM_IN_PER_M, 0.071),
+    llmOutPerM: num(process.env.PRICE_LLM_OUT_PER_M, 0.463),
+    sttPerHour: num(process.env.PRICE_STT_PER_HOUR, 0.04),
+  },
   /** Allow the keyless demo account (fixtures, no Telegram). */
   allowDemo: (process.env.ALLOW_DEMO ?? 'true') === 'true',
 }

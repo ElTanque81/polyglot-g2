@@ -3,11 +3,12 @@ import cors from '@fastify/cors'
 import { randomUUID } from 'node:crypto'
 import { config, telegramConfigured } from './config.js'
 import * as store from './store.js'
-import { defaultSettings, READ_LANGS, type Commitment, type InboxItem, type Provider, type ReadLang, type Settings } from './types.js'
+import { defaultSettings, READ_LANGS, type Commitment, type InboxItem, type Provider, type ReadLang, type Register, type Settings } from './types.js'
 import { DemoProvider } from './providers/demo.js'
 import { TelegramProvider, startLogin, testConnect, verifyLogin } from './providers/telegram.js'
 import { aiEnabled, cleanTranscript, digest, findPromises, suggestReplies, triage } from './ai.js'
 import { sttEnabled, transcribe } from './stt.js'
+import { addUsage, logActivity, meterCtx, usageOf } from './meter.js'
 import { scriptedDigest, scriptedPromises, scriptedReplies, scriptedTranscript, scriptedTriage } from './providers/demo-script.js'
 
 store.load()
@@ -19,6 +20,12 @@ await app.register(cors, {
   allowedHeaders: ['Content-Type', 'Authorization'],
   maxAge: 86400,
 })
+// Attribute every request to its account (cost meter, activity log).
+app.addHook('onRequest', (req, _reply, done) => {
+  const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '')
+  meterCtx.run({ token }, done)
+})
+
 app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: 2 * 1024 * 1024 }, (_req, body, done) => done(null, body))
 
 // ----------------------------------------------------------- sessions ----
@@ -32,7 +39,7 @@ function liveFor(token: string): Live {
   if (l) return l
   const acc = store.getAccount(token)
   if (!acc) throw Object.assign(new Error('unauthorized'), { statusCode: 401 })
-  const provider = acc.kind === 'demo' ? new DemoProvider() : new TelegramProvider(store.decrypt(acc.session!))
+  const provider = acc.kind === 'demo' ? new DemoProvider() : new TelegramProvider(store.decrypt(acc.session!, token))
   l = { provider, inbox: [], triaged: new Map() }
   live.set(h, l)
   return l
@@ -102,7 +109,7 @@ app.post<{ Body: { loginId: string; code: string; password?: string } }>('/auth/
   const r = await verifyLogin(String(loginId), String(code ?? '').trim(), password ? String(password) : undefined)
   if (!r.ok) return r
   const token = store.newToken()
-  store.putAccount(token, { kind: 'telegram', session: store.encrypt(r.session), settings: defaultSettings(), createdAt: Date.now() })
+  store.putAccount(token, { kind: 'telegram', session: store.encrypt(r.session, token), settings: defaultSettings(), createdAt: Date.now(), activity: [{ t: Math.floor(Date.now() / 1000), kind: 'signin' }] })
   return { ok: true, token }
 })
 
@@ -111,7 +118,7 @@ app.post('/auth/demo', async () => {
   const token = store.newToken()
   store.putAccount(token, {
     kind: 'demo',
-    settings: { ...defaultSettings(), focusChats: ['1001', '1005', '1002', '1003', '1004'], channels: ['2001', '2002', '2003', '2004'] },
+    settings: { ...defaultSettings(), focusChats: ['1001', '1006', '1005', '1002', '1003', '1004'], channels: ['2001', '2002', '2003', '2004'] },
     createdAt: Date.now(),
   })
   return { ok: true, token }
@@ -144,7 +151,15 @@ app.put<{ Body: Partial<Settings> }>('/settings', async req => {
   if (typeof b.readLang === 'string' && (READ_LANGS as readonly string[]).includes(b.readLang)) patch.readLang = b.readLang as ReadLang
   if (b.style === 'short' || b.style === 'friendly' || b.style === 'formal') patch.style = b.style
   if (typeof b.translate === 'boolean') patch.translate = b.translate
-  return { settings: store.updateSettings(token, patch) }
+  if (typeof b.readOnly === 'boolean') patch.readOnly = b.readOnly
+  if (b.registers && typeof b.registers === 'object') {
+    const regs: Record<string, Register> = {}
+    for (const [k, v] of Object.entries(b.registers).slice(0, 100)) if (v === 'formal' || v === 'casual') regs[String(k)] = v
+    patch.registers = regs
+  }
+  const settings = store.updateSettings(token, patch)
+  logActivity('settings')
+  return { settings }
 })
 
 // -------------------------------------------------------------- inbox ----
@@ -164,6 +179,11 @@ app.get('/inbox', async req => {
   return { items, needYou: items.filter(i => i.needsYou).length, promises: openPromises(req).length }
 })
 
+/** Chat title for the activity log (from the current inbox, else the id). */
+function titleOf(l: Live, chatId: string) {
+  return l.inbox.find(i => i.chatId === chatId)?.chatTitle ?? chatId
+}
+
 function findItem(l: Live, chatId: string, msgId: number) {
   const it = l.inbox.find(i => i.chatId === chatId && i.msgId === msgId) ?? l.triaged.get(`${chatId}:${msgId}`)
   if (!it) throw Object.assign(new Error('MESSAGE_NOT_IN_INBOX'), { statusCode: 404 })
@@ -173,24 +193,30 @@ function findItem(l: Live, chatId: string, msgId: number) {
 app.post<{ Body: { chatId: string; msgId: number } }>('/replies', async req => {
   const { settings, live: l } = auth(req)
   const item = findItem(l, String(req.body.chatId), Number(req.body.msgId))
-  if (scripted(l)) { const r = scriptedReplies(item.chatId, item.msgId, settings.readLang); if (r) return r }
+  addUsage({ replies: 1 })
+  if (scripted(l)) { const r = scriptedReplies(item.chatId, item.msgId, settings.readLang, settings.registers?.[item.chatId]); if (r) return r }
   const history = await l.provider.history(item.chatId, 10)
   return suggestReplies(item, history, settings)
 })
 
-app.post<{ Body: { chatId: string; text: string; replyTo?: number } }>('/send', async req => {
-  const { live: l } = auth(req)
+const READ_ONLY = () => Object.assign(new Error('READ_ONLY'), { statusCode: 403 })
+
+app.post<{ Body: { chatId: string; text: string; replyTo?: number; lang?: string } }>('/send', async req => {
+  const { settings, live: l } = auth(req)
+  if (settings.readOnly) throw READ_ONLY()
   const text = String(req.body.text ?? '').trim().slice(0, 4000)
   if (!text) throw Object.assign(new Error('EMPTY'), { statusCode: 400 })
   const chatId = String(req.body.chatId)
   const r = await l.provider.send(chatId, text, req.body.replyTo ? Number(req.body.replyTo) : undefined)
   await l.provider.markRead(chatId).catch(() => {})
+  logActivity('sent', titleOf(l, chatId), req.body.lang ? String(req.body.lang).slice(0, 2) : undefined)
   return { ok: true, ...r }
 })
 
 app.post<{ Body: { chatId: string; maxId?: number } }>('/read', async req => {
   const { live: l } = auth(req)
   await l.provider.markRead(String(req.body.chatId), req.body.maxId ? Number(req.body.maxId) : undefined)
+  logActivity('read', titleOf(l, String(req.body.chatId)))
   return { ok: true }
 })
 
@@ -203,6 +229,7 @@ app.post('/read-all', async req => {
 app.post<{ Body: { chatId: string; hours?: number } }>('/mute', async req => {
   const { live: l } = auth(req)
   await l.provider.mute(String(req.body.chatId), Math.min(Math.max(Number(req.body.hours ?? 1), 1), 168))
+  logActivity('muted', titleOf(l, String(req.body.chatId)))
   return { ok: true }
 })
 
@@ -214,20 +241,34 @@ app.get('/digest', async req => {
 
 // ---------------------------------------------------------------- voice ----
 
-app.post<{ Querystring: { chatId?: string; msgId?: string; lang?: string } }>('/stt', async req => {
+app.post<{ Querystring: { chatId?: string; msgId?: string; lang?: string; register?: string } }>('/stt', async req => {
   const { settings, live: l } = auth(req)
   const pcm = req.body as Buffer
   if (!Buffer.isBuffer(pcm)) throw Object.assign(new Error('SEND_PCM_AS_OCTET_STREAM'), { statusCode: 415 })
   const item = req.query.chatId ? l.inbox.find(i => i.chatId === req.query.chatId && i.msgId === Number(req.query.msgId)) : undefined
   const replyLang = req.query.lang || item?.translated?.from || settings.readLang
+  const register: Register = req.query.register === 'formal' || req.query.register === 'casual' ? req.query.register : (settings.registers?.[req.query.chatId ?? ''] ?? 'auto')
+  addUsage({ voice: 1 })
   if (!sttEnabled()) {
     if (l.provider.name !== 'demo') throw Object.assign(new Error('STT_NOT_CONFIGURED'), { statusCode: 503 })
     const s = scriptedTranscript(req.query.chatId, Number(req.query.msgId), settings.readLang) // demo without STT key
-    return aiEnabled() ? { raw: s.raw, ...(await cleanTranscript(s.raw, item, replyLang, settings)) } : s
+    return aiEnabled() ? { raw: s.raw, ...(await cleanTranscript(s.raw, item, replyLang, settings, register)) } : s
   }
+  addUsage({ sttSec: Math.max(10, pcm.length / 32000) }) // Groq bills at least 10 s per request
   const raw = await transcribe(pcm)
-  return { raw, ...(await cleanTranscript(raw, item, replyLang, settings)) }
+  return { raw, ...(await cleanTranscript(raw, item, replyLang, settings, register)) }
 })
+
+// ------------------------------------------------------- trust and cost ----
+
+/** What Polyglot did for you (no message content is ever stored). */
+app.get('/activity', async req => {
+  const { token } = auth(req)
+  return { activity: store.getAccount(token)?.activity ?? [] }
+})
+
+/** This month's usage and what it cost in API fees. */
+app.get('/usage', async req => usageOf(auth(req).token))
 
 // ------------------------------------------------------------- promises ----
 
@@ -279,10 +320,14 @@ function promiseFor(token: string, key: string) {
 
 /** Marks a promise done and tells the other person, in their language. */
 app.post<{ Body: { key: string; send?: boolean } }>('/promises/done', async req => {
-  const { token, live: l } = auth(req)
+  const { token, settings, live: l } = auth(req)
   const c = promiseFor(token, String(req.body.key))
-  if (req.body.send !== false) await l.provider.send(c.chatId, c.doneText, c.msgId)
+  if (req.body.send !== false) {
+    if (settings.readOnly) throw READ_ONLY()
+    await l.provider.send(c.chatId, c.doneText, c.msgId)
+  }
   store.mutate(token, a => { a.commitments![c.key].state = 'done' })
+  logActivity('promise_done', c.chatTitle, c.doneLang)
   return { ok: true }
 })
 
@@ -291,6 +336,7 @@ app.post<{ Body: { key: string; hours?: number } }>('/promises/snooze', async re
   const c = promiseFor(token, String(req.body.key))
   const hours = Math.min(Math.max(Number(req.body.hours ?? 1), 0.25), 72)
   store.mutate(token, a => { a.commitments![c.key].snoozedUntil = nowS() + Math.round(hours * 3600) })
+  logActivity('promise_snoozed', c.chatTitle)
   return { ok: true }
 })
 
@@ -298,6 +344,7 @@ app.post<{ Body: { key: string } }>('/promises/drop', async req => {
   const { token } = auth(req)
   const c = promiseFor(token, String(req.body.key))
   store.mutate(token, a => { a.commitments![c.key].state = 'dropped' })
+  logActivity('promise_dropped', c.chatTitle)
   return { ok: true }
 })
 

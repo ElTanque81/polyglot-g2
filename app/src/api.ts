@@ -8,7 +8,16 @@ export const API_URL: string =
 export type Lang = 'en' | 'de'
 export const READ_LANGS = ['en', 'de', 'es', 'fr', 'it', 'pt', 'nl', 'pl', 'tr', 'ru', 'uk', 'zh', 'ja', 'ko', 'vi', 'id'] as const
 export type ReadLang = (typeof READ_LANGS)[number]
-export interface Settings { focusChats: string[]; channels: string[]; lang: Lang; readLang: ReadLang; style: 'short' | 'friendly' | 'formal'; translate: boolean }
+export type Register = 'auto' | 'formal' | 'casual'
+export interface Settings {
+  focusChats: string[]; channels: string[]; lang: Lang; readLang: ReadLang; style: 'short' | 'friendly' | 'formal'; translate: boolean
+  registers: Record<string, Register>; readOnly: boolean
+}
+export interface Usage {
+  month: string; llmIn: number; llmOut: number; llmCalls: number; sttSec: number; triaged: number; translated: number; replies: number; voice: number
+  costUsd: number; prices: { llmInPerM: number; llmOutPerM: number; sttPerHour: number }
+}
+export interface Activity { t: number; kind: string; chat?: string; lang?: string }
 export interface Reply { text: string; meaning: string }
 export interface Commitment {
   key: string; chatId: string; chatTitle: string; msgId: number; what: string; due: number | null
@@ -50,16 +59,18 @@ export const api = {
   chats: () => call<{ chats: ChatInfo[] }>('GET', '/chats'),
   saveSettings: (s: Partial<Settings>) => call<{ settings: Settings }>('PUT', '/settings', s),
   inbox: () => call<{ items: InboxItem[]; needYou: number; promises: number }>('GET', '/inbox'),
-  replies: (chatId: string, msgId: number) => call<{ replies: Reply[]; replyLang: string }>('POST', '/replies', { chatId, msgId }),
+  replies: (chatId: string, msgId: number) => call<{ replies: Reply[]; replyLang: string; register?: 'formal' | 'casual' }>('POST', '/replies', { chatId, msgId }),
+  usage: () => call<Usage>('GET', '/usage'),
+  activity: () => call<{ activity: Activity[] }>('GET', '/activity'),
   promises: () => call<{ promises: Commitment[] }>('GET', '/promises'),
   promiseDone: (key: string) => call<{ ok: boolean }>('POST', '/promises/done', { key }),
   promiseSnooze: (key: string, hours: number) => call<{ ok: boolean }>('POST', '/promises/snooze', { key, hours }),
   promiseDrop: (key: string) => call<{ ok: boolean }>('POST', '/promises/drop', { key }),
-  send: (chatId: string, text: string, replyTo?: number) => call<{ ok: boolean; msgId: number }>('POST', '/send', { chatId, text, replyTo }),
+  send: (chatId: string, text: string, replyTo?: number, lang?: string) => call<{ ok: boolean; msgId: number }>('POST', '/send', { chatId, text, replyTo, lang }),
   read: (chatId: string, maxId?: number) => call<{ ok: boolean }>('POST', '/read', { chatId, maxId }),
   readAll: () => call<{ ok: boolean }>('POST', '/read-all', {}),
   mute: (chatId: string, hours = 1) => call<{ ok: boolean }>('POST', '/mute', { chatId, hours }),
   digest: () => call<{ points: DigestPoint[]; channels: number; posts: number }>('GET', '/digest'),
-  stt: (pcm: Uint8Array, q: { chatId?: string; msgId?: number; lang?: string }) =>
+  stt: (pcm: Uint8Array, q: { chatId?: string; msgId?: number; lang?: string; register?: string }) =>
     call<{ raw: string; text: string; meaning: string }>('POST', `/stt?${new URLSearchParams(Object.entries(q).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]))}`, undefined, pcm),
 }

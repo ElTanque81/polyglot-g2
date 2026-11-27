@@ -72,6 +72,19 @@ export function sanitize(s: string): string {
 const UNRENDERABLE = /[\u0590-\u08FF\u0900-\u0DFF\u0E00-\u0E7F\uFB1D-\uFDFF\uFE70-\uFEFF]/
 export const renderable = (s: string) => !UNRENDERABLE.test(s)
 
+/** Clip by display width: CJK and full-width characters take two columns. */
+export function clipW(s: string, cols: number): string {
+  let w = 0, out = ''
+  for (const ch of s) {
+    const c = ch.codePointAt(0)!
+    const cw = (c >= 0x1100 && c <= 0x115F) || (c >= 0x2E80 && c <= 0xA4CF) || (c >= 0xAC00 && c <= 0xD7A3) || (c >= 0xF900 && c <= 0xFAFF) || (c >= 0xFE30 && c <= 0xFE4F) || (c >= 0xFF00 && c <= 0xFF60) || (c >= 0xFFE0 && c <= 0xFFE6) ? 2 : 1
+    if (w + cw > cols - 1) return out.trimEnd() + '…'
+    w += cw
+    out += ch
+  }
+  return out
+}
+
 export function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s
 }
@@ -143,8 +156,11 @@ export class Glasses {
       const r = await this.bridge.createStartUpPageContainer(
         new CreateStartUpPageContainer({ containerTotalNum, textObject, listObject, menuObject } as never),
       )
-      if (r !== 0) console.error('[Polyglot] startup page failed', r)
       this.started = true
+      if (r !== 0) {
+        // A startup page already exists (e.g. after a WebView reload): rebuild instead.
+        await this.bridge.rebuildPageContainer(new RebuildPageContainer({ containerTotalNum, textObject, listObject, menuObject } as never))
+      }
     } else {
       const ok = await this.bridge.rebuildPageContainer(
         new RebuildPageContainer({ containerTotalNum, textObject, listObject, menuObject } as never),

@@ -1,4 +1,4 @@
-import { api, ApiError, setToken, READ_LANGS, type ChatInfo, type Settings } from './api'
+import { api, ApiError, setToken, READ_LANGS, type Activity, type ChatInfo, type Settings, type Usage } from './api'
 import { getLang, setLang, type Lang } from './i18n'
 
 /**
@@ -21,6 +21,14 @@ const T = {
     save: 'Save', saved: 'Saved. Your glasses are updated.', logout: 'Sign out and delete session',
     signedInAs: (n: string, p: string) => `Signed in as ${n}${p === 'demo' ? ' (demo)' : ''}`,
     privacy: 'Messages are never stored. Only the chats you pick are read. Your Telegram session is encrypted on the Polyglot server; signing out deletes it.',
+    regAuto: 'Tone: auto', regFormal: 'Formal', regCasual: 'Casual',
+    regHint: 'Tone of replies per chat. Auto reads it from the history (keigo, Sie/du, usted/tú); work and unknown chats default to formal.',
+    readOnly: 'Read-only mode', readOnlyHint: 'Polyglot reads and translates, but never sends anything for you.',
+    trustTitle: 'Trust', activityTitle: 'What Polyglot did', noActivity: 'Nothing yet.',
+    usageTitle: 'This month', usageLine: (u: Usage) => `${u.triaged} messages read · ${u.translated} translated · ${u.replies} reply drafts · ${u.voice} voice replies`,
+    costLine: (c: string) => `API cost so far: ${c}`,
+    act: { sent: 'Sent a reply to', read: 'Marked read:', muted: 'Muted 1 h:', promise_done: 'Promise done, told', promise_snoozed: 'Promise snoozed:', promise_dropped: 'Promise dropped:', signin: 'Signed in with Telegram', settings: 'Settings changed' } as Record<string, string>,
+    selfHost: 'This server is run by whoever set up Polyglot for you. The code is open source, so you can run your own on any computer.',
     readLang: 'Read my messages in', readHint: 'Messages in other languages are translated into this one. Replies go out in the sender\'s language.',
     search: 'Search chats', err: (e: string) => `Error: ${e}`, noTg: 'Telegram login is not configured on this server (TG_API_ID / TG_API_HASH missing in server/.env). Use the demo.',
     sending: 'Asking Telegram for a code…', checking: 'Signing in…', changeNumber: 'Use another number',
@@ -39,6 +47,14 @@ const T = {
     save: 'Speichern', saved: 'Gespeichert. Die Brille ist aktualisiert.', logout: 'Abmelden und Sitzung löschen',
     signedInAs: (n: string, p: string) => `Angemeldet als ${n}${p === 'demo' ? ' (Demo)' : ''}`,
     privacy: 'Nachrichten werden nie gespeichert. Nur die gewählten Chats werden gelesen. Deine Telegram-Sitzung liegt verschlüsselt auf dem Polyglot-Server; Abmelden löscht sie.',
+    regAuto: 'Ton: auto', regFormal: 'Förmlich', regCasual: 'Locker',
+    regHint: 'Tonfall der Antworten pro Chat. Auto erkennt ihn aus dem Verlauf (Keigo, Sie/du, usted/tú); Arbeit und Unbekannte sind standardmäßig förmlich.',
+    readOnly: 'Nur-Lesen-Modus', readOnlyHint: 'Polyglot liest und übersetzt, sendet aber nie etwas in deinem Namen.',
+    trustTitle: 'Vertrauen', activityTitle: 'Was Polyglot getan hat', noActivity: 'Noch nichts.',
+    usageTitle: 'Dieser Monat', usageLine: (u: Usage) => `${u.triaged} Nachrichten gelesen · ${u.translated} übersetzt · ${u.replies} Antwortentwürfe · ${u.voice} Sprachantworten`,
+    costLine: (c: string) => `API-Kosten bisher: ${c}`,
+    act: { sent: 'Antwort gesendet an', read: 'Gelesen:', muted: '1 Std stumm:', promise_done: 'Versprechen erledigt, informiert:', promise_snoozed: 'Versprechen verschoben:', promise_dropped: 'Versprechen verworfen:', signin: 'Mit Telegram angemeldet', settings: 'Einstellungen geändert' } as Record<string, string>,
+    selfHost: 'Diesen Server betreibt, wer Polyglot für dich eingerichtet hat. Der Code ist Open Source, du kannst also deinen eigenen auf jedem Rechner betreiben.',
     readLang: 'Nachrichten lesen auf', readHint: 'Nachrichten in anderen Sprachen werden hierhin übersetzt. Antworten gehen in der Sprache des Absenders raus.',
     search: 'Chats suchen', err: (e: string) => `Fehler: ${e}`, noTg: 'Telegram-Login ist auf diesem Server nicht eingerichtet (TG_API_ID / TG_API_HASH fehlen in server/.env). Nutze die Demo.',
     sending: 'Telegram schickt dir einen Code…', checking: 'Anmeldung läuft…', changeNumber: 'Andere Nummer verwenden',
@@ -92,15 +108,19 @@ export class PhonePage {
   private chats: ChatInfo[] = []
   private settings: Settings | null = null
   private filter = ''
+  private usage: Usage | null = null
+  private activity: Activity[] = []
 
   constructor(el: HTMLElement, private hooks: PhoneHooks) { this.root = el }
 
   async show(signedIn: boolean) {
     if (!signedIn) return this.renderLogin()
     try {
-      const [me, chats] = await Promise.all([api.me(), api.chats()])
-      this.settings = me.settings
+      const [me, chats, usage, activity] = await Promise.all([api.me(), api.chats(), api.usage().catch(() => null), api.activity().catch(() => ({ activity: [] }))])
+      this.settings = { ...me.settings, registers: me.settings.registers ?? {}, readOnly: !!me.settings.readOnly }
       this.chats = chats.chats
+      this.usage = usage
+      this.activity = activity.activity
       if (me.settings.lang !== getLang()) { setLang(me.settings.lang); await this.hooks.saveLang(me.settings.lang) }
       this.renderSettings(me.name, me.provider)
     } catch (e) {
@@ -183,12 +203,16 @@ export class PhonePage {
     const people = this.chats.filter(c => c.kind !== 'channel')
     const channels = this.chats.filter(c => c.kind === 'channel')
     const match = (c: ChatInfo) => !this.filter || c.title.toLowerCase().includes(this.filter.toLowerCase())
+    const reg = (c: ChatInfo) => {
+      const v = s.registers[c.id] ?? 'auto'
+      return `<select class="reg" data-reg="${esc(c.id)}">${(['auto', 'formal', 'casual'] as const).map(o => `<option value="${o}" ${v === o ? 'selected' : ''}>${o === 'auto' ? L().regAuto : o === 'formal' ? L().regFormal : L().regCasual}</option>`).join('')}</select>`
+    }
     const row = (c: ChatInfo, group: 'f' | 'c', on: boolean) =>
-      `<label class="chat"><input type="checkbox" data-g="${group}" value="${esc(c.id)}" ${on ? 'checked' : ''}><span>${esc(c.title)}</span>${c.unread ? `<em>${c.unread}</em>` : ''}</label>`
+      `<div class="chat"><label class="pick"><input type="checkbox" data-g="${group}" value="${esc(c.id)}" ${on ? 'checked' : ''}><span>${esc(c.title)}</span>${c.unread ? `<em>${c.unread}</em>` : ''}</label>${group === 'f' && on ? reg(c) : ''}</div>`
     this.shell(`<p class="who">${esc(L().signedInAs(name, provider))}</p>
       <button id="switch">${L().switchAccount}</button>
       <input id="filter" class="search" placeholder="${L().search}" value="${esc(this.filter)}">
-      <section><h2>${L().focusTitle}</h2><p class="hint">${L().focusHint}</p>
+      <section><h2>${L().focusTitle}</h2><p class="hint">${L().focusHint} ${L().regHint}</p>
         ${people.filter(match).slice(0, 80).map(c => row(c, 'f', s.focusChats.includes(c.id))).join('')}</section>
       <section><h2>${L().channelsTitle}</h2><p class="hint">${L().channelsHint}</p>
         ${channels.filter(match).slice(0, 60).map(c => row(c, 'c', s.channels.includes(c.id))).join('')}</section>
@@ -198,9 +222,18 @@ export class PhonePage {
         <label>${L().style}<select id="style">${(['short', 'friendly', 'formal'] as const).map(v => `<option value="${v}" ${s.style === v ? 'selected' : ''}>${L()[v]}</option>`).join('')}</select></label>
         <label class="chat"><input type="checkbox" id="translate" ${s.translate ? 'checked' : ''}><span>${L().translate}</span></label>
       </section>
+      <section><h2>${L().trustTitle}</h2>
+        <label class="chat"><input type="checkbox" id="readOnly" ${s.readOnly ? 'checked' : ''}><span>${L().readOnly}</span></label>
+        <p class="hint">${L().readOnlyHint}</p>
+        <h2 style="margin-top:12px">${L().activityTitle}</h2>
+        ${this.activity.length ? `<ul class="log">${this.activity.slice(0, 15).map(a => `<li><time>${new Date(a.t * 1000).toLocaleString(getLang() === 'de' ? 'de-DE' : 'en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</time> ${esc(L().act[a.kind] ?? a.kind)} ${esc(a.chat ?? '')}${a.lang ? ` (${esc(a.lang.toUpperCase())})` : ''}</li>`).join('')}</ul>` : `<p class="hint">${L().noActivity}</p>`}
+        <p class="hint">${L().selfHost}</p>
+      </section>
+      ${this.usage ? `<section><h2>${L().usageTitle}</h2><p class="hint">${L().usageLine(this.usage)}</p><p class="hint">${L().costLine(`$${this.usage.costUsd.toFixed(this.usage.costUsd < 1 ? 4 : 2)}`)}</p></section>` : ''}
       <button id="save" class="primary">${L().save}</button><p id="msg" class="ok"></p>
       <button id="logout" class="danger">${L().logout}</button>`)
 
+    this.root.querySelectorAll<HTMLInputElement>('input[data-g="f"]').forEach(b => b.onchange = () => { this.collect(); this.renderSettings(name, provider) })
     const filter = this.root.querySelector<HTMLInputElement>('#filter')!
     filter.oninput = () => { this.collect(); this.filter = filter.value; this.renderSettings(name, provider); this.root.querySelector<HTMLInputElement>('#filter')!.focus() }
     this.root.querySelector<HTMLButtonElement>('#save')!.onclick = async () => {
@@ -233,6 +266,13 @@ export class PhonePage {
       if (b.checked && !has) list.push(b.value)
       if (!b.checked && has) list.splice(list.indexOf(b.value), 1)
     }
+    for (const sel of this.root.querySelectorAll<HTMLSelectElement>('select[data-reg]')) {
+      const id = sel.dataset.reg!
+      if (sel.value === 'auto') delete s.registers[id]
+      else s.registers[id] = sel.value as 'formal' | 'casual'
+    }
+    const ro = this.root.querySelector<HTMLInputElement>('#readOnly')
+    if (ro) s.readOnly = ro.checked
     const rl = this.root.querySelector<HTMLSelectElement>('#readLang')
     if (rl) s.readLang = rl.value as Settings['readLang']
     const style = this.root.querySelector<HTMLSelectElement>('#style')

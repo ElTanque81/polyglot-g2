@@ -1,5 +1,6 @@
 import { config } from './config.js'
-import type { ChannelPost, InboxItem, OutgoingMsg, ReadLang, Settings } from './types.js'
+import type { ChannelPost, InboxItem, OutgoingMsg, ReadLang, Register, Settings } from './types.js'
+import { addUsage } from './meter.js'
 
 /**
  * All AI calls go through one LLM (Otari gateway, Claude or OpenAI). Every function has
@@ -43,7 +44,9 @@ async function llmJSON<T>(system: string, user: string, maxTokens = 600): Promis
       model, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: user }],
     })
     if (!res.ok) throw new Error(`Claude ${res.status}: ${raw.slice(0, 200)}`)
-    text = (JSON.parse(raw) as { content: { type: string; text?: string }[] }).content.filter(c => c.type === 'text').map(c => c.text).join('')
+    const data = JSON.parse(raw) as { content: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } }
+    addUsage({ llmIn: data.usage?.input_tokens ?? 0, llmOut: data.usage?.output_tokens ?? 0, llmCalls: 1 })
+    text = data.content.filter(c => c.type === 'text').map(c => c.text).join('')
   } else {
     const body = { model, max_tokens: maxTokens, temperature: 0.4, messages: [{ role: 'system', content: sys }, { role: 'user', content: user }] }
     const auth = { authorization: `Bearer ${key}` }
@@ -53,7 +56,9 @@ async function llmJSON<T>(system: string, user: string, maxTokens = 600): Promis
       if (host) { regionBase = `https://${host}/api/v1`; out = await post(regionBase, '/chat/completions', auth, body) }
     }
     if (!out.res.ok) throw new Error(`${provider} ${out.res.status}: ${out.text.slice(0, 200)}`)
-    text = (JSON.parse(out.text) as { choices: { message: { content: string } }[] }).choices[0]?.message?.content ?? ''
+    const data = JSON.parse(out.text) as { choices: { message: { content: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }
+    addUsage({ llmIn: data.usage?.prompt_tokens ?? 0, llmOut: data.usage?.completion_tokens ?? 0, llmCalls: 1 })
+    text = data.choices[0]?.message?.content ?? ''
   }
   text = text.replace(/<think>[\s\S]*?<\/think>/g, '')
   const start = text.search(/[[{]/)
@@ -84,6 +89,7 @@ Return an array of {i, needsYou, gist, lang, translation?}.`,
       1400,
     )
     const byI = new Map(out.map(o => [o.i, o]))
+    addUsage({ triaged: batch.length, translated: out.filter(o => o.translation).length })
     return items.map((m, i) => {
       const o = byI.get(i)
       if (!o) return heuristicTriage(m)
@@ -112,6 +118,14 @@ function heuristicTriage(m: InboxItem): InboxItem {
 
 export interface Reply { text: string; meaning: string }
 
+/** Register instructions, with the language-specific forms that matter most. */
+function registerRule(r: Register): string {
+  const forms = 'Respect language-specific forms: Japanese keigo/teineigo vs plain form, German Sie vs du, Spanish usted vs tú, French vous vs tu, Korean jondaetmal vs banmal, Russian вы vs ты, Arabic polite formulas.'
+  if (r === 'formal') return `Use a formal, polite register. ${forms}`
+  if (r === 'casual') return `Use a casual, friendly register. ${forms}`
+  return `Detect the register the reader uses with this person from the history ("You" lines) and from how the other person writes: formal or casual. ${forms} If unclear (no history, a client, a boss, a stranger, an older person), choose formal.`
+}
+
 /**
  * Three one-tap replies, written in the language of the message, each with its
  * meaning in the reader's language so they know what they are sending.
@@ -120,18 +134,20 @@ export async function suggestReplies(
   item: InboxItem,
   history: { sender: string; out: boolean; text: string }[],
   s: Settings,
-): Promise<{ replies: Reply[]; replyLang: string }> {
-  const fb = { replies: fallbackReplies(s.readLang), replyLang: item.translated?.from ?? s.readLang }
+): Promise<{ replies: Reply[]; replyLang: string; register: 'formal' | 'casual' }> {
+  const reg: Register = s.registers?.[item.chatId] ?? 'auto'
+  const fb = { replies: fallbackReplies(s.readLang), replyLang: item.translated?.from ?? s.readLang, register: (reg === 'casual' ? 'casual' : 'formal') as 'formal' | 'casual' }
   if (!aiEnabled()) return fb
   try {
-    const out = await llmJSON<{ lang: string; replies: { text: string; meaning: string }[] }>(
+    const out = await llmJSON<{ lang: string; register: string; replies: { text: string; meaning: string }[] }>(
       `You draft replies the reader can send with one tap from smart glasses.
 Write exactly 3 different replies to the LAST message, each max 45 characters, no emoji, no quotes.
 Cover: a yes/agree option, a specific helpful option, and a polite defer/no option.
 Style: ${s.style}. Match how the reader writes in the history ("You" lines).
+Register: ${registerRule(reg)}
 Write each reply in the language of the last message (lang = its ISO 639-1 code), natural for a native speaker.
 meaning: the same reply in ${nameOf(s.readLang)}, max 45 characters (identical if lang is ${s.readLang}).
-Return {"lang": "xx", "replies": [{"text": "...", "meaning": "..."}, x3]}.`,
+Return {"lang": "xx", "register": "formal" | "casual", "replies": [{"text": "...", "meaning": "..."}, x3]}.`,
       JSON.stringify({
         chat: item.chatTitle,
         history: history.slice(-8).map(h => `${h.out ? 'You' : h.sender}: ${clip(h.text, 200)}`),
@@ -144,7 +160,8 @@ Return {"lang": "xx", "replies": [{"text": "...", "meaning": "..."}, x3]}.`,
       .filter(r => r.text)
       .slice(0, 3)
     const lang = (out.lang ?? '').toLowerCase().slice(0, 2) || fb.replyLang
-    return replies.length ? { replies, replyLang: lang } : fb
+    const register = reg !== 'auto' ? reg : out.register === 'casual' ? 'casual' : 'formal'
+    return replies.length ? { replies, replyLang: lang, register } : fb
   } catch (e) {
     console.warn('replies fallback:', (e as Error).message)
     return fb
@@ -163,14 +180,14 @@ const fallbackReplies = (lang: ReadLang): Reply[] =>
  * Turn a raw voice transcript (spoken in any language) into a sendable message
  * in the chat's language, plus its meaning in the reader's language.
  */
-export async function cleanTranscript(raw: string, item: InboxItem | undefined, replyLang: string, s: Settings): Promise<Reply> {
+export async function cleanTranscript(raw: string, item: InboxItem | undefined, replyLang: string, s: Settings, register: Register = 'auto'): Promise<Reply> {
   const text = raw.trim()
   if (!text) return { text: '', meaning: '' }
   if (!aiEnabled()) { const t = text.charAt(0).toUpperCase() + text.slice(1); return { text: t, meaning: t } }
   try {
     const out = await llmJSON<{ text: string; meaning: string }>(
       `Turn a dictated chat reply into a clean message: fix punctuation, numbers ("two" -> "2" for times), filler words and obvious speech-recognition errors.
-Keep the meaning and the speaker's tone; do not add content.
+Keep the meaning; do not add content. Register: ${registerRule(register)}
 text: the message in ${nameOf(replyLang)} (translate if the speaker used another language), max 300 characters.
 meaning: the same message in ${nameOf(s.readLang)}, max 200 characters.
 Return {"text": "...", "meaning": "..."}.`,

@@ -1,5 +1,5 @@
 import { api, ApiError, type Commitment, type DigestPoint, type InboxItem, type Reply } from './api'
-import { Glasses, DIM, BRIGHT, sanitize, clip, renderable, type Gesture, type Screen } from './glasses'
+import { Glasses, DIM, BRIGHT, sanitize, clip, clipW, renderable, type Gesture, type Screen } from './glasses'
 import { t, getLang, langName } from './i18n'
 
 /**
@@ -28,6 +28,7 @@ export class PolyglotApp {
   private promiseCount = 0
   private replies: Reply[] = []
   private replyLang = 'en'
+  private replyRegister: 'formal' | 'casual' | '' = ''
   private draft: Reply = { text: '', meaning: '' }
   private voice: 'idle' | 'rec' | 'busy' | 'done' = 'idle'
   private chunks: Uint8Array[] = []
@@ -107,6 +108,13 @@ export class PolyglotApp {
   private fail(err: unknown) {
     console.error('[Polyglot]', err)
     if (err instanceof ApiError && err.status === 401) { this.mode = 'signin'; this.render(); return }
+    if (err instanceof ApiError && err.message === 'READ_ONLY') {
+      clearInterval(this.sendTimer)
+      this.pending = null
+      if (this.mode === 'sending') this.mode = this.items.length ? 'focus' : 'empty'
+      this.flash(t().readOnlyOn, 3000)
+      return
+    }
     this.flash(t().error)
   }
 
@@ -216,12 +224,14 @@ export class PolyglotApp {
     if (!it) return
     this.mode = 'replies'
     this.replies = []
+    this.replyRegister = ''
     this.replyLang = it.translated?.from ?? this.readLang()
     await this.render() // shows "drafting…" on the reply page
     const r = await api.replies(it.chatId, it.msgId)
     if (this.mode !== 'replies') return
     this.replies = r.replies
     this.replyLang = r.replyLang
+    this.replyRegister = r.register ?? ''
     await this.render()
   }
 
@@ -266,7 +276,7 @@ export class PolyglotApp {
     let o = 0
     for (const c of this.chunks) { pcm.set(c, o); o += c.length }
     const it = this.cur()
-    const r = await api.stt(pcm, { chatId: it?.chatId, msgId: it?.msgId, lang: this.replyLang })
+    const r = await api.stt(pcm, { chatId: it?.chatId, msgId: it?.msgId, lang: this.replyLang, register: this.replyRegister || undefined })
     if (this.mode !== 'voice') return
     this.draft = { text: r.text, meaning: r.meaning || r.text }
     this.voice = r.text ? 'done' : 'idle'
@@ -300,7 +310,7 @@ export class PolyglotApp {
     if (!p) return this.backToFocus()
     if (p.kind === 'reply') {
       const it = p.item
-      await api.send(it.chatId, p.text, it.kind === 'group' ? it.msgId : undefined)
+      await api.send(it.chatId, p.text, it.kind === 'group' ? it.msgId : undefined, p.lang)
       this.dropChat(it.chatId)
       this.mode = this.items.length ? 'focus' : 'empty'
       this.flash(t().sent(it.sender || it.chatTitle), 2500)
@@ -448,13 +458,13 @@ export class PolyglotApp {
         let note = it.gist ? `AI: ${it.gist}` : ''
         if (it.translated) {
           const orig = sanitize(it.translated.original)
-          note = renderable(orig) ? `${L.orig} ${clip(orig, 46)}` : L.hiddenScript(langName(it.translated.from))
+          note = renderable(orig) ? `${L.orig} ${clipW(orig, 50)}` : L.hiddenScript(langName(it.translated.from))
         }
         const right = it.translated ? L.translatedTo(it.translated.from, this.readLang()) : countsLine
         return this.main(`${L.appName}  ${this.idx + 1}/${this.items.length}`, right, `${head}\n${text}`, note, L.hintFocus)
       }
       case 'replies': {
-        const head = clip(`${who}: ${sanitize(it?.text ?? '')}`, 52)
+        const head = clipW(`${who}: ${sanitize(it?.text ?? '')}`, 52)
         if (this.replies.length === 0) {
           return { layout: 'replies-wait', texts: [
             { name: 'hdr', x: 0, y: 0, w: 576, h: 40, text: head, bright: DIM },
@@ -462,7 +472,8 @@ export class PolyglotApp {
             { name: 'foot', x: 0, y: 246, w: 576, h: 42, text: L.hintReplies, bright: DIM },
           ] }
         }
-        const foot = this.replyLang !== this.readLang() ? `${L.hintReplies}   ${L.sendsAs(this.replyLang)}` : L.hintReplies
+        const tags = [this.replyLang !== this.readLang() ? L.sendsAs(this.replyLang) : '', this.replyRegister ? L[this.replyRegister] : ''].filter(Boolean).join(' · ')
+        const foot = tags ? `${L.hintRepliesShort}   ${tags}` : L.hintReplies
         return this.listScreen('replies', head, [...this.replies.map(r => this.replyLabel(r)), L.speakOwn, L.markRead, L.mute1h], foot)
       }
       case 'voice': {

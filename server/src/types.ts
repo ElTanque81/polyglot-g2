@@ -70,6 +70,33 @@ export interface Settings {
   /** short, friendly, formal */
   style: 'short' | 'friendly' | 'formal'
   translate: boolean
+  /** Per-chat register for replies: auto-detected from the history unless set */
+  registers: Record<string, Register>
+  /** Read-only mode: Polyglot never sends anything on the user's behalf */
+  readOnly: boolean
+}
+
+export type Register = 'auto' | 'formal' | 'casual'
+
+/** Per-month usage of one account, for the cost meter. */
+export interface Usage {
+  month: string // YYYY-MM
+  llmIn: number
+  llmOut: number
+  llmCalls: number
+  sttSec: number
+  triaged: number
+  translated: number
+  replies: number
+  voice: number
+}
+
+/** Content-free record of something Polyglot did for the user. */
+export interface Activity {
+  t: number
+  kind: 'sent' | 'read' | 'muted' | 'promise_done' | 'promise_snoozed' | 'promise_dropped' | 'signin' | 'settings'
+  chat?: string
+  lang?: string
 }
 
 export const defaultSettings = (): Settings => ({
@@ -79,6 +106,8 @@ export const defaultSettings = (): Settings => ({
   readLang: 'en',
   style: 'short',
   translate: true,
+  registers: {},
+  readOnly: false,
 })
 
 /** What every Telegram backend (real or demo) must offer. */

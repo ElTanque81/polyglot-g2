@@ -30,6 +30,12 @@ function seed(): Chat[] {
       ],
     },
     {
+      id: '1006', title: 'Tanaka-san (client)', kind: 'user', unread: 0, readUpTo: 0, mutedUntil: 0,
+      msgs: [
+        { id: 1, sender: 'Tanaka-san (client)', out: false, text: '明日の会議の資料を、本日中にお送りいただけますでしょうか。', date: t - 600 },
+      ],
+    },
+    {
       id: '1005', title: 'Omar', kind: 'user', unread: 0, readUpTo: 0, mutedUntil: 0,
       msgs: [
         { id: 1, sender: 'Omar', out: false, text: 'مرحبا! هل ما زلنا على موعد العشاء يوم الخميس في دبي مارينا؟', date: t - 1500 },

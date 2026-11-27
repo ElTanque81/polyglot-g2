@@ -27,9 +27,10 @@ People who live in multilingual Telegram: founders and remote teams across count
 3. **Speak your language, send theirs.** Hold the touchpad and say one sentence in your own language. Whisper transcribes the G2 microphone, the LLM cleans it up and translates it; you see the meaning and the real text, then tap to send.
 4. **5-second undo.** Every send shows the exact text and its meaning, with a countdown you can cancel.
 5. **Promise tracker.** Polyglot reads what *you* wrote and spots commitments in any language ("I'll send you the hotel link tomorrow"). They appear with a due time; one tap tells the other person it's done, in their language. Or snooze it.
-6. **"Needs you" radar.** Messages that ask you something, mention you or set a deadline come first, with a one-line gist.
-7. **Channel brief across languages.** Your news and crypto channels merged into 3 points, even when the same story comes from an English and a Russian channel.
-8. **Mark read / mute 1 h** from the reply list. Phone page in English or German.
+6. **The right tone for every chat.** A reply to a client in Japanese needs keigo, a reply to a friend in Spanish needs *tú*. Polyglot reads the register from each chat's history (keigo vs plain, Sie vs du, usted vs tú, vous vs tu, вы vs ты) and defaults to formal for work and unknown contacts. You can pin it per chat. The reply list shows it: `goes out in JA · formal`.
+7. **"Needs you" radar.** Messages that ask you something, mention you or set a deadline come first, with a one-line gist.
+8. **Channel brief across languages.** Your news and crypto channels merged into 3 points, even when the same story comes from an English and a Russian channel.
+9. **Mark read / mute 1 h** from the reply list. Phone page in English or German.
 
 | Read any language | Arabic, which G2 can't draw | Replies by meaning |
 |---|---|---|
@@ -38,6 +39,10 @@ People who live in multilingual Telegram: founders and remote teams across count
 | ![](docs/screens/5-sending-arabic.png) | ![](docs/screens/6-voice-translate.png) | ![](docs/screens/7-promises.png) |
 | **Close the loop in one tap** | **Brief across languages** | **Needs-you radar** |
 | ![](docs/screens/8-promise-done.png) | ![](docs/screens/9-brief.png) | ![](docs/screens/1-focus.png) |
+
+| **Japanese client** | **Replies in keigo** | |
+|---|---|---|
+| ![](docs/screens/11-japanese.png) | ![](docs/screens/12-keigo-replies.png) | |
 
 ### Controls
 
@@ -54,6 +59,61 @@ People who live in multilingual Telegram: founders and remote teams across count
 | Inbox | double tap | exit (system dialog) |
 
 Works with the G2 temple touchpads and the R1 ring.
+
+## Real-life moments we designed for
+
+| Moment | What Polyglot does |
+|---|---|
+| Your Japanese client asks for the deck, mid-meeting | Shows it in your language, offers three keigo replies, sends one with a tap |
+| A friend in Madrid asks about tomorrow | Casual *tú* replies, because that is how you two write |
+| Omar writes in Arabic, which G2 cannot draw | Translation on the display, reply in Arabic, you see what it means |
+| You promised "I'll book a table" while walking | Lands in Promises with a due time; one tap tells him it's done |
+| Your hands are full | Hold, speak one sentence in your language, tap to send |
+| You tapped the wrong reply | 5 seconds to undo, showing exactly what would go out |
+| You want it to only read for now | Read-only mode: nothing is ever sent |
+
+## Trust: signing in with your Telegram account
+
+Polyglot needs a real Telegram session to see your private chats, so trust is part of the product, not an afterthought.
+
+- **Self-host first.** The code is open source and runs on your own Mac or server with your own keys (`start-mac.command`). Nothing leaves it except calls to Telegram, your LLM and Whisper.
+- **Your device holds half the key.** Each Telegram session is encrypted with AES-256-GCM under a key derived from the server secret *and* your device token. The server stores only a hash of that token, so the data file plus the server secret are still not enough to open a session.
+- **Data minimization.** Only the chats you pick are read. Messages are never stored. The LLM sees only the message being handled and up to 8 lines of context.
+- **You stay in control.** Read-only mode, 5-second undo, a content-free activity log on the phone page ("Sent a reply to Omar (AR)"), and sign-out deletes the account. Polyglot also shows up in Telegram itself under *Settings → Devices* as "Polyglot (Even G2)", where you can end the session at any time.
+- **Next for a hosted version:** sessions sealed in a trusted execution environment, an independent security review, and a bot-based mode (Telegram Business) for people who don't want a full session at all.
+
+## What it costs per user
+
+The phone page has a live cost meter: Polyglot counts the real tokens and audio seconds of every call for each account and shows this month's API cost.
+
+Our estimate for a **heavy user** (200 messages a day in focus chats, 20 reply drafts, 5 voice replies, 60 own messages scanned for promises, 2 channel briefs):
+
+| Item per month | Volume | Tokens / audio |
+|---|---|---|
+| Read, triage, translate | 6,000 messages | ≈ 0.84 M in, 0.36 M out |
+| Reply drafts | 600 | ≈ 0.39 M in, 0.11 M out |
+| Promises scan | 1,800 own messages | ≈ 0.14 M in, 0.03 M out |
+| Channel briefs | 60 | ≈ 0.18 M in, 0.02 M out |
+| Voice replies | 150 | ≈ 30 min of audio |
+
+That is about 1.6 M input and 0.5 M output tokens. With Qwen3 235B Instruct at [$0.071 / $0.463 per M tokens (OpenRouter)](https://openrouter.ai/qwen/qwen3-235b-a22b-2507/apps) it comes to **≈ $0.36 a month**; at a pricier host such as [$0.22 / $0.88](https://www.getmaxim.ai/bifrost/llm-cost-calculator/provider/fireworks_ai/model/qwen3-235b-a22b-instruct-2507) ≈ $0.82. Voice adds ≈ $0.02 with [Groq Whisper Large v3 Turbo at $0.04 per hour](https://groq.com/pricing) (billed with a 10-second minimum per request). A typical user with a quarter of that traffic costs ≈ $0.10–0.25 a month.
+
+What keeps it cheap: messages are triaged in batches, every result is cached per message, only foreign-language messages get a translation, briefs run on demand, and a mid-size open model does the work. Prices are configurable (`PRICE_LLM_IN_PER_M`, `PRICE_LLM_OUT_PER_M`, `PRICE_STT_PER_HOUR`) so the meter matches whatever model you run.
+
+## Who uses it every day, and who pays
+
+- **Founders, BD and deal teams** whose deals live in Telegram across countries: crypto, Web3, trading desks, Dubai and Singapore offices.
+- **Traders in foreign-language alpha groups** (Russian, Chinese, Korean, Turkish), who want the gist without copy-pasting.
+- **Client-facing professionals in multilingual cities:** real estate agents, concierge and hospitality staff, recruiters, all answering clients in Arabic, Russian or Chinese.
+- **Expats and families spread across languages.**
+
+They already paid for premium glasses and use Telegram all day. Plan:
+
+| Plan | Price | For |
+|---|---|---|
+| Open source, self-hosted | free, bring your own keys | developers, privacy-first users |
+| Polyglot Pro (hosted) | $3.99 / month | individuals; API cost ≈ $0.10–0.80, so margins stay above 80 % |
+| Polyglot Teams | $6 / seat / month | shared glossary and tone rules per client, admin controls |
 
 ## Architecture
 

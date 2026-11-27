@@ -67,6 +67,10 @@ const en = {
   menuPromises: 'Promises',
   hintEmptyP: 'tap promises   ▼ channel brief   2x exit',
   clearPromises: (n: number) => `${n} open promise${n === 1 ? '' : 's'}, tap to see`,
+  formal: 'formal',
+  hintRepliesShort: 'tap send   2x back',
+  casual: 'casual',
+  readOnlyOn: 'Read-only mode: nothing was sent',
 }
 
 type Dict = typeof en
@@ -138,6 +142,10 @@ const de: Dict = {
   menuPromises: 'Versprechen',
   hintEmptyP: 'Tipp Versprechen   ▼ Kanal-Briefing   2x beenden',
   clearPromises: (n: number) => `${n} offene Versprechen, Tipp zum Anzeigen`,
+  formal: 'förmlich',
+  hintRepliesShort: 'Tipp senden   2x zurück',
+  casual: 'locker',
+  readOnlyOn: 'Nur-Lesen-Modus: nichts gesendet',
 }
 
 const NAMES: Record<string, [string, string]> = {
